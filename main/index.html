@@ -7,12 +7,31 @@
     <style>
 :root {
     --primary-color: #007bff;
+    --background-color: #ffffff;
+    --surface-color: #f8f9fa;
+    --text-color: #212529;
+    --my-message-color: #007bff;
+    --other-message-color: #e9ecef;
+    --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --my-message-text-color: #ffffff;
+    --other-message-text-color: #212529;
+    --input-background: #ffffff;
+    --input-text-color: #212529;
+    --border-color: #dee2e6;
+}
+
+body.dark-mode {
+    --primary-color: #007bff;
     --background-color: #1a1a1a;
     --surface-color: #2c2c2c;
     --text-color: #f0f0f0;
     --my-message-color: #0056b3;
     --other-message-color: #3a3a3a;
-    --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --my-message-text-color: #ffffff;
+    --other-message-text-color: #f0f0f0;
+    --input-background: #444;
+    --input-text-color: #f0f0f0;
+    --border-color: #444;
 }
 
 body {
@@ -23,14 +42,29 @@ body {
     background-color: var(--background-color);
     color: var(--text-color);
     overflow: hidden;
+    transition: background-color 0.3s, color 0.3s;
 }
 
 #header {
     padding: 15px;
     background-color: var(--surface-color);
-    border-bottom: 1px solid #444;
+    border-bottom: 1px solid var(--border-color);
     text-align: center;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#chat-title { 
+    font-weight: bold; 
+}
+
+#chat-nickname {
+    position: absolute;
+    left: 15px;
+    font-size: 0.9em;
 }
 
 #messages {
@@ -49,11 +83,13 @@ body {
     word-wrap: break-word;
     line-height: 1.4;
     background-color: var(--other-message-color);
+    color: var(--other-message-text-color);
     align-self: flex-start;
 }
 
 .message.mine {
-    background-color: var(--primary-color);
+    background-color: var(--my-message-color);
+    color: var(--my-message-text-color);
     align-self: flex-end;
 }
 
@@ -61,7 +97,7 @@ body {
     font-weight: bold;
     font-size: 0.9em;
     margin-bottom: 5px;
-    color: #b0b0b0;
+    color: var(--primary-color);
 }
 
 .message.mine .from {
@@ -70,7 +106,7 @@ body {
 
 .message .timestamp {
     font-size: 0.75em;
-    color: #a0a0a0;
+    color: #888;
     margin-left: 10px;
     float: right;
     clear: both;
@@ -88,16 +124,16 @@ body {
     display: flex;
     padding: 15px;
     background-color: var(--surface-color);
-    border-top: 1px solid #444;
+    border-top: 1px solid var(--border-color);
 }
 
 #input {
     flex-grow: 1;
     padding: 12px 18px;
-    border: 1px solid #555;
+    border: 1px solid var(--border-color);
     border-radius: 25px;
-    background-color: #444;
-    color: var(--text-color);
+    background-color: var(--input-background);
+    color: var(--input-text-color);
     font-size: 1em;
 }
 
@@ -138,18 +174,18 @@ body {
     padding: 30px;
     background: var(--surface-color);
     border-radius: 12px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     text-align: center;
 }
 
 #nickname {
     padding: 12px;
     margin-bottom: 15px;
-    border: 1px solid #555;
+    border: 1px solid var(--border-color);
     border-radius: 8px;
     font-size: 1.1em;
-    background-color: #444;
-    color: var(--text-color);
+    background-color: var(--input-background);
+    color: var(--input-text-color);
     text-align: center;
 }
 
@@ -185,6 +221,55 @@ body {
     display: flex;
     opacity: 1;
 }
+
+.theme-switch-wrapper {
+    display: flex;
+    align-items: center;
+    position: absolute;
+    top: 15px;
+    right: 15px;
+}
+.theme-switch {
+    display: inline-block;
+    height: 24px;
+    position: relative;
+    width: 50px;
+}
+.theme-switch input {
+    display:none;
+}
+.slider {
+    background-color: #ccc;
+    bottom: 0;
+    cursor: pointer;
+    left: 0;
+    position: absolute;
+    right: 0;
+    top: 0;
+    transition: .4s;
+}
+.slider:before {
+    background-color: #fff;
+    bottom: 4px;
+    content: "";
+    height: 16px;
+    left: 4px;
+    position: absolute;
+    transition: .4s;
+    width: 16px;
+}
+input:checked + .slider {
+    background-color: var(--primary-color);
+}
+input:checked + .slider:before {
+    transform: translateX(26px);
+}
+.slider.round {
+    border-radius: 34px;
+}
+.slider.round:before {
+    border-radius: 50%;
+}
     </style>
 </head>
 <body>
@@ -201,6 +286,12 @@ body {
     <div id="chat-container">
         <div id="header">
             <span id="chat-title">ESP32 Chat</span>
+            <div class="theme-switch-wrapper">
+                <label class="theme-switch" for="checkbox">
+                    <input type="checkbox" id="checkbox" />
+                    <div class="slider round"></div>
+                </label>
+            </div>
             <span id="chat-nickname"></span>
         </div>
         <div id="messages"></div>
@@ -216,6 +307,7 @@ body {
         const joinBtn = document.getElementById('join-btn');
         const nicknameInput = document.getElementById('nickname');
         const chatNickname = document.getElementById('chat-nickname');
+        const themeSwitch = document.getElementById('checkbox');
         
         const messages = document.getElementById('messages');
         const form = document.getElementById('form');
@@ -342,6 +434,27 @@ body {
                 input.value = '';
             }
         }
+
+        function setTheme(isDark) {
+            if (isDark) {
+                document.body.classList.add('dark-mode');
+                themeSwitch.checked = true;
+                localStorage.setItem('theme', 'dark');
+            } else {
+                document.body.classList.remove('dark-mode');
+                themeSwitch.checked = false;
+                localStorage.setItem('theme', 'light');
+            }
+        }
+
+        themeSwitch.addEventListener('change', (e) => {
+            setTheme(e.target.checked);
+        });
+
+        // Apply saved theme on load
+        const savedTheme = localStorage.getItem('theme');
+        // Default to dark mode if no theme is saved
+        setTheme(savedTheme === 'light' ? false : true);
     </script>
 </body>
 </html>
