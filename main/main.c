@@ -63,12 +63,19 @@ void broadcast_message(const char* payload, size_t len);
 static void dns_server_task(void *pvParameters);
 // --- Core Logic ---
 
-void add_message_to_buffer(const char* text) {
+char* add_message_to_buffer(const char* text) {
+    char* new_payload = NULL;
     if (xSemaphoreTake(message_mutex, portMAX_DELAY)) {
         if (message_buffer[message_buffer_head].payload) {
             free(message_buffer[message_buffer_head].payload);
         }
-        message_buffer[message_buffer_head].payload = strdup(text);
+        new_payload = strdup(text);
+        message_buffer[message_buffer_head].payload = new_payload;
+        if (new_payload == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate memory for message buffer");
+            xSemaphoreGive(message_mutex);
+            return NULL;
+        }
         message_buffer[message_buffer_head].id = message_id_counter;
         
         message_buffer_head = (message_buffer_head + 1) % MAX_MESSAGES;
@@ -76,6 +83,7 @@ void add_message_to_buffer(const char* text) {
 
         xSemaphoreGive(message_mutex);
     }
+    return new_payload;
 }
 
 void send_history_to_client(int fd) {
@@ -261,6 +269,20 @@ static void wifi_init_softap(void)
     ESP_LOGI(TAG, "SoftAP started, IP: " IPSTR, IP2STR(&ip_info.ip));
 }
 
+static esp_err_t redirect_to_root_handler(httpd_req_t *req)
+{
+    esp_netif_ip_info_t ip_info;
+    esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey("WIFI_AP_DEF"), &ip_info);
+    
+    char location_url[32];
+    sprintf(location_url, "http://" IPSTR "/", IP2STR(&ip_info.ip));
+
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", location_url);
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
 static httpd_handle_t start_webserver(void)
 {
     httpd_handle_t local_server = NULL;
@@ -276,6 +298,14 @@ static httpd_handle_t start_webserver(void)
 
         httpd_uri_t ws = { .uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .is_websocket = true };
         httpd_register_uri_handler(local_server, &ws);
+
+        // Add a catch-all redirect for captive portal. Must be last.
+        httpd_uri_t catch_all = {
+            .uri       = "/*",
+            .method    = HTTP_GET,
+            .handler   = redirect_to_root_handler
+        };
+        httpd_register_uri_handler(local_server, &catch_all);
     }
     return local_server;
 }
@@ -342,6 +372,10 @@ static esp_err_t ws_handler(httpd_req_t *req)
 
         if (ws_pkt.len > 0) {
             buf = calloc(1, ws_pkt.len + 1);
+            if (buf == NULL) {
+                ESP_LOGE(TAG, "Failed to allocate memory for WebSocket message");
+                break;
+            }
             ws_pkt.payload = buf;
             ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
             if (ret != ESP_OK) { free(buf); break; }
@@ -352,9 +386,13 @@ static esp_err_t ws_handler(httpd_req_t *req)
                 cJSON_AddNumberToObject(root, "timestamp", time(NULL));
                 
                 char *processed_msg = cJSON_PrintUnformatted(root);
-                add_message_to_buffer(processed_msg);
-                broadcast_message(processed_msg, strlen(processed_msg));
-                free(processed_msg);
+                if (processed_msg) {
+                    char* safe_payload = add_message_to_buffer(processed_msg);
+                    if (safe_payload) {
+                        broadcast_message(safe_payload, strlen(safe_payload));
+                    }
+                    free(processed_msg); // free the original cJSON output
+                }
                 cJSON_Delete(root);
             }
             free(buf);

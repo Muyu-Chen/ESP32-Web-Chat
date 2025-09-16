@@ -127,7 +127,7 @@ body {
     border-top: 1px solid var(--border-color);
 }
 
-#input {
+#message-input {
     flex-grow: 1;
     padding: 12px 18px;
     border: 1px solid var(--border-color);
@@ -137,7 +137,7 @@ body {
     font-size: 1em;
 }
 
-#input:focus {
+#message-input:focus {
     outline: none;
     border-color: var(--primary-color);
 }
@@ -278,7 +278,7 @@ input:checked + .slider:before {
             <h2>ESP32 Chat</h2>
         </div>
         <div class="login-box">
-            <input type="text" id="nickname" placeholder="Enter your nickname">
+            <input type="text" id="nickname" placeholder="Enter your nickname" autocomplete="off">
             <button id="join-btn">Enter Chat</button>
         </div>
     </div>
@@ -296,7 +296,7 @@ input:checked + .slider:before {
         </div>
         <div id="messages"></div>
         <form id="form" onsubmit="sendMessage(event)">
-            <input type="text" id="input" autocomplete="off" placeholder="Type a message..."/>
+            <input type="text" id="message-input" autocomplete="off" placeholder="Type a message..."/>
             <button id="send">Send</button>
         </form>
     </div>
@@ -311,7 +311,7 @@ input:checked + .slider:before {
         
         const messages = document.getElementById('messages');
         const form = document.getElementById('form');
-        const input = document.getElementById('input');
+        const input = document.getElementById('message-input');
         
         let ws;
         function generateUUID() { // Public Domain/MIT
