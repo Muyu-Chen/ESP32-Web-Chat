@@ -1,0 +1,9 @@
+# ESP-IDF build output
+build/
+
+# SDK configuration
+sdkconfig
+sdkconfig.old
+
+# Other generated files
+partitions_example.csv.bin

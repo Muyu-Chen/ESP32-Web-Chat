@@ -1,0 +1,278 @@
+/*
+ * ESP32 WiFi Chat Server
+ *
+ * This code is in the Public Domain (or CC0 licensed, at your option.)
+*/
+#include <string.h>
+#include <time.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "esp_system.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "esp_log.h"
+#include "nvs_flash.h"
+#include "esp_netif.h"
+#include "lwip/sockets.h"
+#include "lwip/dns.h"
+#include "esp_http_server.h"
+#include "cJSON.h"
+
+#define EXAMPLE_ESP_WIFI_SSID      "ESPChat"
+#define EXAMPLE_ESP_WIFI_PASS      "esp-chat"
+#define EXAMPLE_ESP_WIFI_CHANNEL   1
+#define EXAMPLE_MAX_STA_CONN       8
+
+#define MAX_CLIENTS 10
+#define MAX_MESSAGES 100
+
+static const char *TAG = "CHAT_SERVER";
+
+// --- WebSocket Client Management ---
+typedef struct {
+    int fd;
+    bool active;
+    char name[32];
+} client_slot_t;
+
+static client_slot_t client_slots[MAX_CLIENTS];
+static SemaphoreHandle_t client_mutex;
+
+// --- Message Ring Buffer ---
+typedef struct {
+    char *payload;
+    uint32_t id;
+} message_t;
+
+static message_t message_buffer[MAX_MESSAGES];
+static uint32_t message_id_counter = 0;
+static int message_buffer_head = 0;
+static SemaphoreHandle_t message_mutex;
+
+// --- App State ---
+static httpd_handle_t server = NULL;
+
+// --- Function Prototypes ---
+static void wifi_init_softap(void);
+static esp_err_t root_get_handler(httpd_req_t *req);
+static esp_err_t favicon_get_handler(httpd_req_t *req);
+static esp_err_t ws_handler(httpd_req_t *req);
+static httpd_handle_t start_webserver(void);
+void broadcast_message(const char* payload, size_t len);
+
+// --- Core Logic ---
+
+void add_message_to_buffer(const char* text) {
+    if (xSemaphoreTake(message_mutex, portMAX_DELAY)) {
+        if (message_buffer[message_buffer_head].payload) {
+            free(message_buffer[message_buffer_head].payload);
+        }
+        message_buffer[message_buffer_head].payload = strdup(text);
+        message_buffer[message_buffer_head].id = message_id_counter;
+        
+        message_buffer_head = (message_buffer_head + 1) % MAX_MESSAGES;
+        message_id_counter++;
+
+        xSemaphoreGive(message_mutex);
+    }
+}
+
+void send_history_to_client(int fd) {
+    if (xSemaphoreTake(message_mutex, portMAX_DELAY)) {
+        httpd_ws_frame_t ws_pkt;
+        memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+        ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+
+        int current_pos = message_buffer_head;
+        for (int i = 0; i < MAX_MESSAGES; i++) {
+            int index = (current_pos + i) % MAX_MESSAGES;
+            if (message_buffer[index].payload) {
+                ws_pkt.payload = (uint8_t*)message_buffer[index].payload;
+                ws_pkt.len = strlen(message_buffer[index].payload);
+                httpd_ws_send_frame_async(server, fd, &ws_pkt);
+            }
+        }
+        xSemaphoreGive(message_mutex);
+    }
+}
+
+void broadcast_message(const char* payload, size_t len) {
+    if (xSemaphoreTake(client_mutex, portMAX_DELAY)) {
+        httpd_ws_frame_t ws_pkt;
+        memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+        ws_pkt.payload = (uint8_t*)payload;
+        ws_pkt.len = len;
+        ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (client_slots[i].active) {
+                httpd_ws_send_frame_async(server, client_slots[i].fd, &ws_pkt);
+            }
+        }
+        xSemaphoreGive(client_mutex);
+    }
+}
+
+void app_main(void)
+{
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+      ESP_ERROR_CHECK(nvs_flash_erase());
+      ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    client_mutex = xSemaphoreCreateMutex();
+    message_mutex = xSemaphoreCreateMutex();
+
+    wifi_init_softap();
+
+    // xTaskCreate(dns_server_task, "dns_server", 4096, NULL, 5, NULL);
+
+    server = start_webserver();
+}
+
+// --- Network and Server Setup ---
+
+static void wifi_init_softap(void)
+{
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_t *p_netif = esp_netif_create_default_wifi_ap();
+    assert(p_netif);
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    wifi_config_t wifi_config = {
+        .ap = {
+            .ssid = EXAMPLE_ESP_WIFI_SSID,
+            .ssid_len = strlen(EXAMPLE_ESP_WIFI_SSID),
+            .channel = EXAMPLE_ESP_WIFI_CHANNEL,
+            .password = EXAMPLE_ESP_WIFI_PASS,
+            .max_connection = EXAMPLE_MAX_STA_CONN,
+            .authmode = WIFI_AUTH_WPA2_PSK
+        },
+    };
+    if (strlen(EXAMPLE_ESP_WIFI_PASS) == 0) {
+        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+    }
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    esp_netif_ip_info_t ip_info;
+    esp_netif_get_ip_info(p_netif, &ip_info);
+    ESP_LOGI(TAG, "SoftAP started, IP: " IPSTR, IP2STR(&ip_info.ip));
+}
+
+static httpd_handle_t start_webserver(void)
+{
+    httpd_handle_t local_server = NULL;
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.uri_match_fn = httpd_uri_match_wildcard;
+
+    if (httpd_start(&local_server, &config) == ESP_OK) {
+        httpd_uri_t root = { .uri = "/", .method = HTTP_GET, .handler = root_get_handler };
+        httpd_register_uri_handler(local_server, &root);
+
+        httpd_uri_t favicon = { .uri = "/favicon.ico", .method = HTTP_GET, .handler = favicon_get_handler };
+        httpd_register_uri_handler(local_server, &favicon);
+
+        httpd_uri_t ws = { .uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .is_websocket = true };
+        httpd_register_uri_handler(local_server, &ws);
+    }
+    return local_server;
+}
+
+// --- HTTP and WebSocket Handlers ---
+
+static esp_err_t root_get_handler(httpd_req_t *req)
+{
+    extern const unsigned char index_html_start[] asm("_binary_index_html_start");
+    extern const unsigned char index_html_end[]   asm("_binary_index_html_end");
+    const size_t index_html_size = (index_html_end - index_html_start);
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, (const char *)index_html_start, index_html_size);
+    return ESP_OK;
+}
+
+static esp_err_t favicon_get_handler(httpd_req_t *req)
+{
+    extern const unsigned char favicon_ico_start[] asm("_binary_favicon_ico_start");
+    extern const unsigned char favicon_ico_end[]   asm("_binary_favicon_ico_end");
+    const size_t favicon_ico_size = (favicon_ico_end - favicon_ico_start);
+    httpd_resp_set_type(req, "image/x-icon");
+    httpd_resp_send(req, (const char *)favicon_ico_start, favicon_ico_size);
+    return ESP_OK;
+}
+
+static esp_err_t ws_handler(httpd_req_t *req)
+{
+    if (req->method != HTTP_GET) { return ESP_FAIL; }
+
+    int fd = httpd_req_to_sockfd(req);
+    int client_index = -1;
+
+    if (xSemaphoreTake(client_mutex, portMAX_DELAY)) {
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (!client_slots[i].active) {
+                client_slots[i].fd = fd;
+                client_slots[i].active = true;
+                strcpy(client_slots[i].name, "New User");
+                client_index = i;
+                break;
+            }
+        }
+        xSemaphoreGive(client_mutex);
+    }
+
+    if (client_index == -1) {
+        ESP_LOGE(TAG, "Max clients reached");
+        close(fd);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Client connected (fd=%d) in slot %d", fd, client_index);
+    send_history_to_client(fd);
+
+    // Main receive loop
+    httpd_ws_frame_t ws_pkt;
+    uint8_t *buf = NULL;
+    while (1) {
+        memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+        ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+        esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
+        if (ret != ESP_OK) break; // Client disconnected
+
+        if (ws_pkt.len > 0) {
+            buf = calloc(1, ws_pkt.len + 1);
+            ws_pkt.payload = buf;
+            ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+            if (ret != ESP_OK) { free(buf); break; }
+
+            cJSON *root = cJSON_Parse((const char*)ws_pkt.payload);
+            if (root) {
+                cJSON_AddNumberToObject(root, "id", message_id_counter);
+                cJSON_AddNumberToObject(root, "timestamp", time(NULL));
+                
+                char *processed_msg = cJSON_PrintUnformatted(root);
+                add_message_to_buffer(processed_msg);
+                broadcast_message(processed_msg, strlen(processed_msg));
+                free(processed_msg);
+                cJSON_Delete(root);
+            }
+            free(buf);
+        }
+    }
+
+    // Client disconnected
+    ESP_LOGI(TAG, "Client disconnected (fd=%d) from slot %d", fd, client_index);
+    if (xSemaphoreTake(client_mutex, portMAX_DELAY)) {
+        client_slots[client_index].active = false;
+        xSemaphoreGive(client_mutex);
+    }
+    return ESP_OK;
+}
