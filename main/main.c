@@ -60,7 +60,7 @@ static esp_err_t favicon_get_handler(httpd_req_t *req);
 static esp_err_t ws_handler(httpd_req_t *req);
 static httpd_handle_t start_webserver(void);
 void broadcast_message(const char* payload, size_t len);
-
+static void dns_server_task(void *pvParameters);
 // --- Core Logic ---
 
 void add_message_to_buffer(const char* text) {
@@ -128,9 +128,85 @@ void app_main(void)
 
     wifi_init_softap();
 
-    // xTaskCreate(dns_server_task, "dns_server", 4096, NULL, 5, NULL);
+    xTaskCreate(dns_server_task, "dns_server", 4096, NULL, 5, NULL);
 
     server = start_webserver();
+}
+
+// --- DNS Server Task ---
+const static char *DNS_TAG = "DNS";
+
+static void dns_server_task(void *pvParameters)
+{
+    uint8_t buffer[128];
+    struct sockaddr_in client;
+    socklen_t client_len = sizeof(client);
+    struct sockaddr_in server = {
+        .sin_family = AF_INET,
+        .sin_port = htons(53),
+        .sin_addr.s_addr = INADDR_ANY
+    };
+
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        ESP_LOGE(DNS_TAG, "Failed to create socket");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    if (bind(sock, (struct sockaddr *)&server, sizeof(server)) < 0) {
+        ESP_LOGE(DNS_TAG, "Failed to bind socket");
+        close(sock);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(DNS_TAG, "DNS Server started");
+
+    while (1) {
+        int len = recvfrom(sock, buffer, sizeof(buffer), 0, (struct sockaddr *)&client, &client_len);
+        if (len > 0) {
+            // It's a DNS query. We'll just reply with our IP for any A query.
+            // Get the IP of the AP
+            esp_netif_ip_info_t ip_info;
+            esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey("WIFI_AP_DEF"), &ip_info);
+
+            // Prepare the response
+            buffer[2] |= 0x80; // Set response flag
+            buffer[3] |= 0x80; // Set recursion available flag
+            buffer[7] = 1;     // One answer
+
+            // Pointer to the domain name in the query
+            buffer[len++] = 0xc0;
+            buffer[len++] = 0x0c;
+
+            // Answer type: A record
+            buffer[len++] = 0x00;
+            buffer[len++] = 0x01;
+
+            // Answer class: IN
+            buffer[len++] = 0x00;
+            buffer[len++] = 0x01;
+
+            // TTL: 60 seconds
+            buffer[len++] = 0x00;
+            buffer[len++] = 0x00;
+            buffer[len++] = 0x00;
+            buffer[len++] = 0x3c;
+
+            // IP address length: 4 bytes
+            buffer[len++] = 0x00;
+            buffer[len++] = 0x04;
+
+            // The IP address
+            memcpy(&buffer[len], &ip_info.ip.addr, 4);
+            len += 4;
+
+            sendto(sock, buffer, len, 0, (struct sockaddr *)&client, client_len);
+        }
+    }
+    close(sock);
+    vTaskDelete(NULL);
 }
 
 // --- Network and Server Setup ---
@@ -141,6 +217,24 @@ static void wifi_init_softap(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_t *p_netif = esp_netif_create_default_wifi_ap();
     assert(p_netif);
+
+    // Stop DHCP server
+    ESP_ERROR_CHECK(esp_netif_dhcps_stop(p_netif));
+
+    // Assign a static IP to the AP interface
+    esp_netif_ip_info_t ip_info;
+    IP4_ADDR(&ip_info.ip, 192, 168, 4, 1);
+    IP4_ADDR(&ip_info.gw, 192, 168, 4, 1);
+    IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0);
+    ESP_ERROR_CHECK(esp_netif_set_ip_info(p_netif, &ip_info));
+
+    // Start DHCP server
+    ESP_ERROR_CHECK(esp_netif_dhcps_start(p_netif));
+
+    // Set DNS server for captive portal
+    esp_netif_dns_info_t dns_info;
+    dns_info.ip.u_addr.ip4.addr = ip_info.ip.addr;
+    esp_netif_set_dns_info(p_netif, ESP_NETIF_DNS_MAIN, &dns_info);
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -163,7 +257,6 @@ static void wifi_init_softap(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    esp_netif_ip_info_t ip_info;
     esp_netif_get_ip_info(p_netif, &ip_info);
     ESP_LOGI(TAG, "SoftAP started, IP: " IPSTR, IP2STR(&ip_info.ip));
 }
