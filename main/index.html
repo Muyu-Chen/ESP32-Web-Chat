@@ -302,6 +302,7 @@ input:checked + .slider:before {
     </div>
 
     <script>
+        '''<script>
         const loginContainer = document.getElementById('login-container');
         const chatContainer = document.getElementById('chat-container');
         const joinBtn = document.getElementById('join-btn');
@@ -390,48 +391,60 @@ input:checked + .slider:before {
 
         function connect() {
             const host = window.location.hostname;
+            console.log('Attempting to connect to WebSocket at', `ws://${host}/ws`);
             ws = new WebSocket(`ws://${host}/ws`);
 
             ws.onopen = () => {
+                console.log('WebSocket connection opened.');
                 showSystemMessage('Connected to the server.');
             };
 
             ws.onmessage = (event) => {
-                const msg = JSON.parse(event.data);
-                if (msg.to && msg.to.users && !msg.to.all) {
-                    if (msg.to.users.includes(userId) || msg.from === userId) {
+                console.log('Received raw message:', event.data);
+                try {
+                    const msg = JSON.parse(event.data);
+                    console.log('Parsed message:', msg);
+                    if (msg.to && msg.to.users && !msg.to.all) {
+                        if (msg.to.users.includes(userId) || msg.from === userId) {
+                            showMessage(msg);
+                        }
+                    } else {
                         showMessage(msg);
                     }
-                } else {
-                    showMessage(msg);
+                } catch (e) {
+                    console.error('Error parsing message JSON:', e);
                 }
             };
 
-            ws.onclose = () => {
+            ws.onclose = (event) => {
+                console.log('WebSocket connection closed. Code:', event.code, 'Reason:', event.reason, 'wasClean:', event.wasClean);
                 showSystemMessage('Disconnected. Trying to reconnect in 3 seconds...');
                 setTimeout(connect, 3000);
             };
 
             ws.onerror = (error) => {
                 console.error('WebSocket Error:', error);
-                ws.close();
             };
         }
 
         function sendMessage(event) {
             event.preventDefault();
-            if (input.value && ws.readyState === WebSocket.OPEN) {
+            if (input.value && ws && ws.readyState === WebSocket.OPEN) {
                 const msg = {
                     type: 'text',
                     from: userId,
                     to: { all: true, users: [] },
                     name: localStorage.getItem('esp-chat-nickname'),
                     data: input.value,
-                    id: 0,
+                    id: 0, // Server will assign
                     timestamp: Math.floor(Date.now() / 1000)
                 };
-                ws.send(JSON.stringify(msg));
+                const jsonMsg = JSON.stringify(msg);
+                console.log('Sending message:', jsonMsg);
+                ws.send(jsonMsg);
                 input.value = '';
+            } else {
+                console.log('Could not send message. WebSocket not open. ReadyState:', ws ? ws.readyState : 'ws is null');
             }
         }
 
@@ -455,6 +468,6 @@ input:checked + .slider:before {
         const savedTheme = localStorage.getItem('theme');
         // Default to dark mode if no theme is saved
         setTheme(savedTheme === 'light' ? false : true);
-    </script>
+    </script>'''
 </body>
 </html>

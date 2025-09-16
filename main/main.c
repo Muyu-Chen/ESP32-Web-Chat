@@ -5,6 +5,7 @@
 */
 #include <string.h>
 #include <time.h>
+#include <stddef.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -61,9 +62,11 @@ static esp_err_t ws_handler(httpd_req_t *req);
 static httpd_handle_t start_webserver(void);
 void broadcast_message(const char* payload, size_t len);
 static void dns_server_task(void *pvParameters);
+
 // --- Core Logic ---
 
 char* add_message_to_buffer(const char* text) {
+    ESP_LOGI(TAG, "Adding message to buffer...");
     char* new_payload = NULL;
     if (xSemaphoreTake(message_mutex, portMAX_DELAY)) {
         if (message_buffer[message_buffer_head].payload) {
@@ -72,10 +75,11 @@ char* add_message_to_buffer(const char* text) {
         new_payload = strdup(text);
         message_buffer[message_buffer_head].payload = new_payload;
         if (new_payload == NULL) {
-            ESP_LOGE(TAG, "Failed to allocate memory for message buffer");
+            ESP_LOGE(TAG, "add_message_to_buffer: strdup failed!");
             xSemaphoreGive(message_mutex);
             return NULL;
         }
+        ESP_LOGI(TAG, "strdup successful for new message.");
         message_buffer[message_buffer_head].id = message_id_counter;
         
         message_buffer_head = (message_buffer_head + 1) % MAX_MESSAGES;
@@ -83,6 +87,7 @@ char* add_message_to_buffer(const char* text) {
 
         xSemaphoreGive(message_mutex);
     }
+    ESP_LOGI(TAG, "Message added to buffer.");
     return new_payload;
 }
 
@@ -106,6 +111,7 @@ void send_history_to_client(int fd) {
 }
 
 void broadcast_message(const char* payload, size_t len) {
+    ESP_LOGI(TAG, "Broadcasting message: %s", payload);
     if (xSemaphoreTake(client_mutex, portMAX_DELAY)) {
         httpd_ws_frame_t ws_pkt;
         memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
@@ -115,11 +121,16 @@ void broadcast_message(const char* payload, size_t len) {
 
         for (int i = 0; i < MAX_CLIENTS; i++) {
             if (client_slots[i].active) {
-                httpd_ws_send_frame_async(server, client_slots[i].fd, &ws_pkt);
+                ESP_LOGI(TAG, "Sending to client fd %d", client_slots[i].fd);
+                esp_err_t ret = httpd_ws_send_frame_async(server, client_slots[i].fd, &ws_pkt);
+                if (ret != ESP_OK) {
+                    ESP_LOGE(TAG, "httpd_ws_send_frame_async failed with %d", ret);
+                }
             }
         }
         xSemaphoreGive(client_mutex);
     }
+    ESP_LOGI(TAG, "Broadcast finished.");
 }
 
 void app_main(void)
@@ -149,7 +160,7 @@ static void dns_server_task(void *pvParameters)
     uint8_t buffer[128];
     struct sockaddr_in client;
     socklen_t client_len = sizeof(client);
-    struct sockaddr_in server = {
+    struct sockaddr_in server_addr = {
         .sin_family = AF_INET,
         .sin_port = htons(53),
         .sin_addr.s_addr = INADDR_ANY
@@ -162,7 +173,7 @@ static void dns_server_task(void *pvParameters)
         return;
     }
 
-    if (bind(sock, (struct sockaddr *)&server, sizeof(server)) < 0) {
+    if (bind(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         ESP_LOGE(DNS_TAG, "Failed to bind socket");
         close(sock);
         vTaskDelete(NULL);
@@ -174,39 +185,30 @@ static void dns_server_task(void *pvParameters)
     while (1) {
         int len = recvfrom(sock, buffer, sizeof(buffer), 0, (struct sockaddr *)&client, &client_len);
         if (len > 0) {
-            // It's a DNS query. We'll just reply with our IP for any A query.
-            // Get the IP of the AP
             esp_netif_ip_info_t ip_info;
             esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey("WIFI_AP_DEF"), &ip_info);
 
-            // Prepare the response
-            buffer[2] |= 0x80; // Set response flag
-            buffer[3] |= 0x80; // Set recursion available flag
-            buffer[7] = 1;     // One answer
+            buffer[2] |= 0x80;
+            buffer[3] |= 0x80;
+            buffer[7] = 1;
 
-            // Pointer to the domain name in the query
             buffer[len++] = 0xc0;
             buffer[len++] = 0x0c;
 
-            // Answer type: A record
             buffer[len++] = 0x00;
             buffer[len++] = 0x01;
 
-            // Answer class: IN
             buffer[len++] = 0x00;
             buffer[len++] = 0x01;
 
-            // TTL: 60 seconds
             buffer[len++] = 0x00;
             buffer[len++] = 0x00;
             buffer[len++] = 0x00;
             buffer[len++] = 0x3c;
 
-            // IP address length: 4 bytes
             buffer[len++] = 0x00;
             buffer[len++] = 0x04;
 
-            // The IP address
             memcpy(&buffer[len], &ip_info.ip.addr, 4);
             len += 4;
 
@@ -226,20 +228,16 @@ static void wifi_init_softap(void)
     esp_netif_t *p_netif = esp_netif_create_default_wifi_ap();
     assert(p_netif);
 
-    // Stop DHCP server
     ESP_ERROR_CHECK(esp_netif_dhcps_stop(p_netif));
 
-    // Assign a static IP to the AP interface
     esp_netif_ip_info_t ip_info;
     IP4_ADDR(&ip_info.ip, 192, 168, 4, 1);
     IP4_ADDR(&ip_info.gw, 192, 168, 4, 1);
     IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0);
     ESP_ERROR_CHECK(esp_netif_set_ip_info(p_netif, &ip_info));
 
-    // Start DHCP server
     ESP_ERROR_CHECK(esp_netif_dhcps_start(p_netif));
 
-    // Set DNS server for captive portal
     esp_netif_dns_info_t dns_info;
     dns_info.ip.u_addr.ip4.addr = ip_info.ip.addr;
     esp_netif_set_dns_info(p_netif, ESP_NETIF_DNS_MAIN, &dns_info);
@@ -271,6 +269,7 @@ static void wifi_init_softap(void)
 
 static esp_err_t redirect_to_root_handler(httpd_req_t *req)
 {
+    ESP_LOGI(TAG, "Redirecting request for %s to root", req->uri);
     esp_netif_ip_info_t ip_info;
     esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey("WIFI_AP_DEF"), &ip_info);
     
@@ -288,6 +287,10 @@ static httpd_handle_t start_webserver(void)
     httpd_handle_t local_server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
+    config.max_open_sockets = 16; // Increased from default 7
+    config.max_uri_handlers = 10; // Increased from default 8
+
+    ESP_LOGI(TAG, "Starting webserver with max_open_sockets = %d", config.max_open_sockets);
 
     if (httpd_start(&local_server, &config) == ESP_OK) {
         httpd_uri_t root = { .uri = "/", .method = HTTP_GET, .handler = root_get_handler };
@@ -299,7 +302,6 @@ static httpd_handle_t start_webserver(void)
         httpd_uri_t ws = { .uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .is_websocket = true };
         httpd_register_uri_handler(local_server, &ws);
 
-        // Add a catch-all redirect for captive portal. Must be last.
         httpd_uri_t catch_all = {
             .uri       = "/*",
             .method    = HTTP_GET,
@@ -314,6 +316,7 @@ static httpd_handle_t start_webserver(void)
 
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
+    ESP_LOGI(TAG, "Serving root page");
     extern const unsigned char index_html_start[] asm("_binary_index_html_start");
     extern const unsigned char index_html_end[]   asm("_binary_index_html_end");
     const size_t index_html_size = (index_html_end - index_html_start);
@@ -361,14 +364,19 @@ static esp_err_t ws_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "Client connected (fd=%d) in slot %d", fd, client_index);
     send_history_to_client(fd);
 
-    // Main receive loop
     httpd_ws_frame_t ws_pkt;
     uint8_t *buf = NULL;
     while (1) {
         memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
         ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+        
+        ESP_LOGI(TAG, "[fd=%d] Waiting to receive frame...", fd);
         esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
-        if (ret != ESP_OK) break; // Client disconnected
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "[fd=%d] httpd_ws_recv_frame failed with %d, breaking loop.", fd, ret);
+            break;
+        }
+        ESP_LOGI(TAG, "[fd=%d] Received frame: len=%d, type=%d", fd, ws_pkt.len, ws_pkt.type);
 
         if (ws_pkt.len > 0) {
             buf = calloc(1, ws_pkt.len + 1);
@@ -377,29 +385,39 @@ static esp_err_t ws_handler(httpd_req_t *req)
                 break;
             }
             ws_pkt.payload = buf;
+            
+            ESP_LOGI(TAG, "[fd=%d] Receiving payload...", fd);
             ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
-            if (ret != ESP_OK) { free(buf); break; }
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "[fd=%d] httpd_ws_recv_frame payload failed with %d", fd, ret);
+                free(buf);
+                break;
+            }
+            ESP_LOGI(TAG, "[fd=%d] Payload received: %s", fd, (char*)buf);
 
             cJSON *root = cJSON_Parse((const char*)ws_pkt.payload);
             if (root) {
+                ESP_LOGI(TAG, "[fd=%d] JSON parsed successfully.", fd);
                 cJSON_AddNumberToObject(root, "id", message_id_counter);
                 cJSON_AddNumberToObject(root, "timestamp", time(NULL));
                 
                 char *processed_msg = cJSON_PrintUnformatted(root);
                 if (processed_msg) {
+                    ESP_LOGI(TAG, "[fd=%d] Processed message: %s", fd, processed_msg);
                     char* safe_payload = add_message_to_buffer(processed_msg);
                     if (safe_payload) {
                         broadcast_message(safe_payload, strlen(safe_payload));
                     }
-                    free(processed_msg); // free the original cJSON output
+                    free(processed_msg);
                 }
                 cJSON_Delete(root);
+            } else {
+                ESP_LOGE(TAG, "[fd=%d] cJSON_Parse failed.", fd);
             }
             free(buf);
         }
     }
 
-    // Client disconnected
     ESP_LOGI(TAG, "Client disconnected (fd=%d) from slot %d", fd, client_index);
     if (xSemaphoreTake(client_mutex, portMAX_DELAY)) {
         client_slots[client_index].active = false;
