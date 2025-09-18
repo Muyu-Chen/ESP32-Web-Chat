@@ -1,0 +1,40 @@
+'''<!DOCTYPE html>
+<html>
+<head>
+    <title>ESP32 Chat</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="login-container">
+        <div id="header">
+            <h2>ESP32 Chat</h2>
+        </div>
+        <div class="login-box">
+            <input type="text" id="nickname" placeholder="Enter your nickname" autocomplete="off">
+            <button id="join-btn">Enter Chat</button>
+        </div>
+    </div>
+
+    <div id="chat-container">
+        <div id="header">
+            <span id="chat-title">ESP32 Chat</span>
+            <div class="theme-switch-wrapper">
+                <label class="theme-switch" for="checkbox">
+                    <input type="checkbox" id="checkbox" />
+                    <div class="slider round"></div>
+                </label>
+            </div>
+            <span id="chat-nickname"></span>
+        </div>
+        <div id="messages"></div>
+        <form id="form" onsubmit="sendMessage(event)">
+            <input type="text" id="message-input" autocomplete="off" placeholder="Type a message..."/>
+            <button id="send">Send</button>
+        </form>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>'''
