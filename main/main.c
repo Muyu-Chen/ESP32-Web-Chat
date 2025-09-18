@@ -287,7 +287,7 @@ static httpd_handle_t start_webserver(void)
     httpd_handle_t local_server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_open_sockets = 16; // Increased from default 7
+    // config.max_open_sockets = 16; // config in the esp32 Configuration
     config.max_uri_handlers = 10; // Increased from default 8
 
     ESP_LOGI(TAG, "Starting webserver with max_open_sockets = %d", config.max_open_sockets);
@@ -399,7 +399,10 @@ static esp_err_t ws_handler(httpd_req_t *req)
             if (root) {
                 ESP_LOGI(TAG, "[fd=%d] JSON parsed successfully.", fd);
                 cJSON_AddNumberToObject(root, "id", message_id_counter);
-                cJSON_AddNumberToObject(root, "timestamp", time(NULL));
+                // Only add server timestamp if client didn't provide one
+                if (!cJSON_HasObjectItem(root, "timestamp")) {
+                    cJSON_AddNumberToObject(root, "timestamp", time(NULL));
+                }
                 
                 char *processed_msg = cJSON_PrintUnformatted(root);
                 if (processed_msg) {
