@@ -7,13 +7,15 @@
       "includePath": [
         "${config:idf.espIdfPath}/components/**",
         "${config:idf.espIdfPathWin}/components/**",
-        "${workspaceFolder}/**"
+        "${workspaceFolder}/**",
+        "${config:idf.buildPath}/config" // 加这一行
       ],
       "browse": {
         "path": [
           "${config:idf.espIdfPath}/components",
           "${config:idf.espIdfPathWin}/components",
-          "${workspaceFolder}"
+          "${workspaceFolder}",
+          "${config:idf.buildPath}/config" // 这里也加
         ],
         "limitSymbolsToIncludedHeaders": true
       }

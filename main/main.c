@@ -28,6 +28,7 @@
 
 #define MAX_CLIENTS 10
 #define MAX_MESSAGES 100
+#define HEARTBEAT_INTERVAL_S 30
 
 static const char *TAG = "CHAT_SERVER";
 
@@ -36,6 +37,7 @@ typedef struct {
     int fd;
     bool active;
     char name[32];
+    bool is_alive;
 } client_slot_t;
 
 static client_slot_t client_slots[MAX_CLIENTS];
@@ -59,10 +61,14 @@ static httpd_handle_t server = NULL;
 static void wifi_init_softap(void);
 static esp_err_t root_get_handler(httpd_req_t *req);
 static esp_err_t favicon_get_handler(httpd_req_t *req);
+static esp_err_t style_get_handler(httpd_req_t *req);
+static esp_err_t script_get_handler(httpd_req_t *req);
 static esp_err_t ws_handler(httpd_req_t *req);
 static httpd_handle_t start_webserver(void);
 void broadcast_message(const char* payload, size_t len);
 static void dns_server_task(void *pvParameters);
+static void heartbeat_task(void *pvParameters);
+
 
 // --- Core Logic ---
 
@@ -149,9 +155,49 @@ void app_main(void)
     wifi_init_softap();
 
     xTaskCreate(dns_server_task, "dns_server", 4096, NULL, 5, NULL);
+    xTaskCreate(heartbeat_task, "heartbeat_task", 4096, NULL, 5, NULL);
 
     server = start_webserver();
 }
+
+// --- Heartbeat Task ---
+static void heartbeat_task(void *pvParameters)
+{
+    const char *ping_payload = "{\"type\":\"ping\"}";
+    const size_t ping_len = strlen(ping_payload);
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_INTERVAL_S * 1000));
+
+        if (xSemaphoreTake(client_mutex, portMAX_DELAY)) {
+            ESP_LOGI(TAG, "Running heartbeat check");
+            httpd_ws_frame_t ws_pkt;
+            memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+            ws_pkt.payload = (uint8_t*)ping_payload;
+            ws_pkt.len = ping_len;
+            ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+
+            for (int i = 0; i < MAX_CLIENTS; i++) {
+                if (client_slots[i].active) {
+                    if (!client_slots[i].is_alive) {
+                        ESP_LOGW(TAG, "Client fd=%d seems dead, closing connection.", client_slots[i].fd);
+                        httpd_sess_trigger_close(server, client_slots[i].fd);
+                        client_slots[i].active = false;
+                        continue;
+                    }
+                    
+                    client_slots[i].is_alive = false;
+                    esp_err_t ret = httpd_ws_send_frame_async(server, client_slots[i].fd, &ws_pkt);
+                    if (ret != ESP_OK) {
+                        ESP_LOGE(TAG, "Ping failed for fd=%d with error %d", client_slots[i].fd, ret);
+                    }
+                }
+            }
+            xSemaphoreGive(client_mutex);
+        }
+    }
+}
+
 
 // --- DNS Server Task ---
 const static char *DNS_TAG = "DNS";
@@ -300,6 +346,12 @@ static httpd_handle_t start_webserver(void)
         httpd_uri_t favicon = { .uri = "/favicon.ico", .method = HTTP_GET, .handler = favicon_get_handler };
         httpd_register_uri_handler(local_server, &favicon);
 
+        httpd_uri_t style = { .uri = "/style.css", .method = HTTP_GET, .handler = style_get_handler };
+        httpd_register_uri_handler(local_server, &style);
+
+        httpd_uri_t script = { .uri = "/script.js", .method = HTTP_GET, .handler = script_get_handler };
+        httpd_register_uri_handler(local_server, &script);
+
         httpd_uri_t ws = { .uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .is_websocket = true };
         httpd_register_uri_handler(local_server, &ws);
 
@@ -318,11 +370,11 @@ static httpd_handle_t start_webserver(void)
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Serving root page");
-    extern const unsigned char index_html_start[] asm("_binary_index_html_start");
-    extern const unsigned char index_html_end[]   asm("_binary_index_html_end");
-    const size_t index_html_size = (index_html_end - index_html_start);
+    extern const unsigned char src_index_html_start[] asm("_binary_src_index_html_start");
+    extern const unsigned char src_index_html_end[]   asm("_binary_src_index_html_end");
+    const size_t index_html_size = (src_index_html_end - src_index_html_start);
     httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, (const char *)index_html_start, index_html_size);
+    httpd_resp_send(req, (const char *)src_index_html_start, index_html_size);
     return ESP_OK;
 }
 
@@ -333,6 +385,28 @@ static esp_err_t favicon_get_handler(httpd_req_t *req)
     const size_t favicon_ico_size = (favicon_ico_end - favicon_ico_start);
     httpd_resp_set_type(req, "image/x-icon");
     httpd_resp_send(req, (const char *)favicon_ico_start, favicon_ico_size);
+    return ESP_OK;
+}
+
+static esp_err_t style_get_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "Serving style.css");
+    extern const unsigned char src_style_css_start[] asm("_binary_src_style_css_start");
+    extern const unsigned char src_style_css_end[]   asm("_binary_src_style_css_end");
+    const size_t style_css_size = (src_style_css_end - src_style_css_start);
+    httpd_resp_set_type(req, "text/css");
+    httpd_resp_send(req, (const char *)src_style_css_start, style_css_size);
+    return ESP_OK;
+}
+
+static esp_err_t script_get_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "Serving script.js");
+    extern const unsigned char src_script_js_start[] asm("_binary_src_script_js_start");
+    extern const unsigned char src_script_js_end[]   asm("_binary_src_script_js_end");
+    const size_t script_js_size = (src_script_js_end - src_script_js_start);
+    httpd_resp_set_type(req, "application/javascript");
+    httpd_resp_send(req, (const char *)src_script_js_start, script_js_size);
     return ESP_OK;
 }
 
@@ -351,6 +425,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
                 if (!client_slots[i].active) {
                     client_slots[i].fd = fd;
                     client_slots[i].active = true;
+                    client_slots[i].is_alive = true;
                     strcpy(client_slots[i].name, "New User");
                     client_index = i;
                     break;
@@ -379,36 +454,24 @@ static esp_err_t ws_handler(httpd_req_t *req)
     ws_pkt.type = HTTPD_WS_TYPE_TEXT;
     esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
     if (ret != ESP_OK) {
-        if (ret != ESP_OK)
-        {
-            int err = errno;
-            if (err == ECONNRESET || err == ENOTCONN || err == EPIPE || err == ESHUTDOWN)
-            {
-                ESP_LOGI(TAG, "Client disconnected, fd=%d", fd);
-                // Find and remove client from list
-                if (xSemaphoreTake(client_mutex, portMAX_DELAY))
-                {
-                    for (int i = 0; i < MAX_CLIENTS; i++)
-                    {
-                        if (client_slots[i].fd == fd)
-                        {
-                            client_slots[i].active = false;
-                            break;
-                        }
+        int err = errno;
+        if (err == ECONNRESET || err == ENOTCONN || err == EPIPE || err == ESHUTDOWN) {
+            ESP_LOGI(TAG, "Client disconnected, fd=%d", fd);
+            // Find and remove client from list
+            if (xSemaphoreTake(client_mutex, portMAX_DELAY)) {
+                for (int i = 0; i < MAX_CLIENTS; i++) {
+                    if (client_slots[i].fd == fd) {
+                        client_slots[i].active = false;
+                        break;
                     }
-                    xSemaphoreGive(client_mutex);
                 }
+                xSemaphoreGive(client_mutex);
             }
-            else if (err == EAGAIN || err == EWOULDBLOCK)
-            {
-                // 暂时没数据，不算错误
-                return ESP_OK;
-            }
-            else
-            {
-                ESP_LOGW(TAG, "httpd_ws_recv_frame failed (ret=%d, errno=%d) for fd=%d",
-                         ret, err, fd);
-            }
+        } else if (err == EAGAIN || err == EWOULDBLOCK) {
+            // Not an error, just no data. Return ESP_OK to continue.
+            return ESP_OK;
+        } else {
+            ESP_LOGW(TAG, "httpd_ws_recv_frame failed (ret=%d, errno=%d) for fd=%d", ret, err, fd);
         }
         // The socket is already closed by the httpd server, no need to close(fd)
         return ESP_OK;
@@ -427,13 +490,27 @@ static esp_err_t ws_handler(httpd_req_t *req)
             if (ws_pkt.type == HTTPD_WS_TYPE_TEXT) {
                 cJSON *root = cJSON_ParseWithLength((const char*)ws_pkt.payload, ws_pkt.len);
                 if (root) {
-                    char *processed_msg = cJSON_PrintUnformatted(root);
-                    if (processed_msg) {
-                        char* safe_payload = add_message_to_buffer(processed_msg);
-                        if (safe_payload) {
-                            broadcast_message(safe_payload, strlen(safe_payload));
+                    cJSON *type = cJSON_GetObjectItem(root, "type");
+                    if (type && cJSON_IsString(type) && strcmp(type->valuestring, "pong") == 0) {
+                        ESP_LOGI(TAG, "Pong received from fd=%d", fd);
+                        if (xSemaphoreTake(client_mutex, portMAX_DELAY)) {
+                            for (int i = 0; i < MAX_CLIENTS; i++) {
+                                if (client_slots[i].fd == fd) {
+                                    client_slots[i].is_alive = true;
+                                    break;
+                                }
+                            }
+                            xSemaphoreGive(client_mutex);
                         }
-                        free(processed_msg);
+                    } else {
+                        char *processed_msg = cJSON_PrintUnformatted(root);
+                        if (processed_msg) {
+                            char* safe_payload = add_message_to_buffer(processed_msg);
+                            if (safe_payload) {
+                                broadcast_message(safe_payload, strlen(safe_payload));
+                            }
+                            free(processed_msg);
+                        }
                     }
                     cJSON_Delete(root);
                 } else {
