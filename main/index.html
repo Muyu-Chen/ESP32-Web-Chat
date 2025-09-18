@@ -440,7 +440,9 @@ input:checked + .slider:before {
                 };
                 const jsonMsg = JSON.stringify(msg);
                 console.log('Sending message:', jsonMsg);
-                ws.send(jsonMsg);
+                setTimeout(() => {
+                    ws.send(jsonMsg);
+                }, 0);
                 input.value = '';
             } else {
                 console.log('Could not send message. WebSocket not open. ReadyState:', ws ? ws.readyState : 'ws is null');
