@@ -19,6 +19,7 @@
 #include "lwip/dns.h"
 #include "esp_http_server.h"
 #include "cJSON.h"
+#include <errno.h>
 
 #define EXAMPLE_ESP_WIFI_SSID      "ESPChat"
 #define EXAMPLE_ESP_WIFI_PASS      "esp-chat"
@@ -337,123 +338,111 @@ static esp_err_t favicon_get_handler(httpd_req_t *req)
 
 static esp_err_t ws_handler(httpd_req_t *req)
 {
-    if (req->method != HTTP_GET) {
-        ESP_LOGE(TAG, "Request method is not GET");
-        return ESP_FAIL;
-    }
-
     int fd = httpd_req_to_sockfd(req);
-    if (fd < 0) {
-        ESP_LOGE(TAG, "Failed to get socket descriptor");
-        return ESP_FAIL;
-    }
 
-    int client_index = -1;
-    if (xSemaphoreTake(client_mutex, portMAX_DELAY)) {
-        for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (!client_slots[i].active) {
-                client_slots[i].fd = fd;
-                client_slots[i].active = true;
-                // Name will be updated on first message
-                strcpy(client_slots[i].name, "New User");
-                client_index = i;
-                break;
+    // Check if this is the initial GET handshake
+    if (req->method == HTTP_GET) {
+        ESP_LOGI(TAG, "Handshake done, new client connected, fd=%d", fd);
+
+        // Add client to our list
+        int client_index = -1;
+        if (xSemaphoreTake(client_mutex, portMAX_DELAY)) {
+            for (int i = 0; i < MAX_CLIENTS; i++) {
+                if (!client_slots[i].active) {
+                    client_slots[i].fd = fd;
+                    client_slots[i].active = true;
+                    strcpy(client_slots[i].name, "New User");
+                    client_index = i;
+                    break;
+                }
             }
+            xSemaphoreGive(client_mutex);
         }
-        xSemaphoreGive(client_mutex);
+
+        if (client_index == -1) {
+            ESP_LOGE(TAG, "Max clients reached, closing connection for fd=%d", fd);
+            close(fd);
+            return ESP_FAIL;
+        }
+
+        send_history_to_client(fd);
+        return ESP_OK;
     }
 
-    if (client_index == -1) {
-        ESP_LOGE(TAG, "Max clients reached, closing connection");
-        // No need to close fd, httpd will do it
-        return ESP_FAIL;
-    }
-
-    ESP_LOGI(TAG, "Client connected (fd=%d) in slot %d", fd, client_index);
-    send_history_to_client(fd);
+    // --- This part handles subsequent data frames ---
 
     httpd_ws_frame_t ws_pkt;
     uint8_t *buf = NULL;
-    const size_t max_frame_size = 4096; // Max frame size
 
-    // Allocate buffer for receiving frames
-    buf = malloc(max_frame_size);
-    if (buf == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate memory for WebSocket message");
-        // No need to close fd, httpd will do it
-        if (xSemaphoreTake(client_mutex, portMAX_DELAY)) {
-            client_slots[client_index].active = false;
-            xSemaphoreGive(client_mutex);
-        }
-        return ESP_FAIL;
-    }
-
-    while (1) {
-        memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
-        ws_pkt.payload = buf;
-
-        esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, max_frame_size);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "[fd=%d] httpd_ws_recv_frame failed with %d", fd, ret);
-            break; // Exit loop on error
-        }
-
-        // 0 length frames are pong frames, ignore them
-        if (ws_pkt.len == 0) {
-            continue;
-        }
-
-        ESP_LOGI(TAG, "[fd=%d] Received frame: len=%d, type=%d", fd, ws_pkt.len, ws_pkt.type);
-        
-        // We only handle text frames, ignore others
-        if (ws_pkt.type == HTTPD_WS_TYPE_TEXT) {
-            // Log received payload safely
-            ESP_LOGI(TAG, "[fd=%d] Payload received: %.*s", fd, ws_pkt.len, (char*)ws_pkt.payload);
-
-            // Parse JSON with length to avoid needing null-termination
-            cJSON *root = cJSON_ParseWithLength((const char*)ws_pkt.payload, ws_pkt.len);
-            if (root) {
-                ESP_LOGI(TAG, "[fd=%d] JSON parsed successfully.", fd);
-
-                // Update client name if it's in the message
-                cJSON *name = cJSON_GetObjectItem(root, "name");
-                if (name && cJSON_IsString(name) && (name->valuestring != NULL)) {
-                    if (xSemaphoreTake(client_mutex, portMAX_DELAY)) {
-                        strncpy(client_slots[client_index].name, name->valuestring, sizeof(client_slots[client_index].name) - 1);
-                        xSemaphoreGive(client_mutex);
+    // 1. Probe for frame length
+    memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+    ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
+    if (ret != ESP_OK) {
+        if (ret != ESP_OK)
+        {
+            int err = errno;
+            if (err == ECONNRESET || err == ENOTCONN || err == EPIPE || err == ESHUTDOWN)
+            {
+                ESP_LOGI(TAG, "Client disconnected, fd=%d", fd);
+                // Find and remove client from list
+                if (xSemaphoreTake(client_mutex, portMAX_DELAY))
+                {
+                    for (int i = 0; i < MAX_CLIENTS; i++)
+                    {
+                        if (client_slots[i].fd == fd)
+                        {
+                            client_slots[i].active = false;
+                            break;
+                        }
                     }
+                    xSemaphoreGive(client_mutex);
                 }
-
-                cJSON_AddNumberToObject(root, "id", message_id_counter);
-                // Only add server timestamp if client didn't provide one
-                if (!cJSON_HasObjectItem(root, "timestamp")) {
-                    cJSON_AddNumberToObject(root, "timestamp", time(NULL));
-                }
-                
-                char *processed_msg = cJSON_PrintUnformatted(root);
-                if (processed_msg) {
-                    ESP_LOGI(TAG, "[fd=%d] Processed message: %s", fd, processed_msg);
-                    char* safe_payload = add_message_to_buffer(processed_msg);
-                    if (safe_payload) {
-                        broadcast_message(safe_payload, strlen(safe_payload));
-                        // safe_payload is a copy, it's stored in the buffer, no need to free here
-                    }
-                    free(processed_msg);
-                }
-                cJSON_Delete(root);
-            } else {
-                ESP_LOGE(TAG, "[fd=%d] cJSON_Parse failed.", fd);
+            }
+            else if (err == EAGAIN || err == EWOULDBLOCK)
+            {
+                // 暂时没数据，不算错误
+                return ESP_OK;
+            }
+            else
+            {
+                ESP_LOGW(TAG, "httpd_ws_recv_frame failed (ret=%d, errno=%d) for fd=%d",
+                         ret, err, fd);
             }
         }
+        // The socket is already closed by the httpd server, no need to close(fd)
+        return ESP_OK;
     }
 
-    free(buf);
-    ESP_LOGI(TAG, "Client disconnected (fd=%d) from slot %d", fd, client_index);
-    if (xSemaphoreTake(client_mutex, portMAX_DELAY)) {
-        client_slots[client_index].active = false;
-        xSemaphoreGive(client_mutex);
+    // 2. Receive payload if frame has length
+    if (ws_pkt.len > 0) {
+        buf = calloc(1, ws_pkt.len + 1);
+        if (buf == NULL) {
+            ESP_LOGE(TAG, "Failed to calloc memory for WebSocket buffer");
+            return ESP_ERR_NO_MEM;
+        }
+        ws_pkt.payload = buf;
+        ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+        if (ret == ESP_OK) {
+            if (ws_pkt.type == HTTPD_WS_TYPE_TEXT) {
+                cJSON *root = cJSON_ParseWithLength((const char*)ws_pkt.payload, ws_pkt.len);
+                if (root) {
+                    char *processed_msg = cJSON_PrintUnformatted(root);
+                    if (processed_msg) {
+                        char* safe_payload = add_message_to_buffer(processed_msg);
+                        if (safe_payload) {
+                            broadcast_message(safe_payload, strlen(safe_payload));
+                        }
+                        free(processed_msg);
+                    }
+                    cJSON_Delete(root);
+                } else {
+                    ESP_LOGE(TAG, "cJSON_Parse failed for fd=%d", fd);
+                }
+            }
+        }
+        free(buf);
     }
     
-    // httpd will close the socket
     return ESP_OK;
 }

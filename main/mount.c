@@ -26,7 +26,6 @@
 #include "driver/sdmmc_host.h"
 #endif
 #include "sdmmc_cmd.h"
-#include "file_serving_example_common.h"
 
 static const char *TAG = "example_mount";
 

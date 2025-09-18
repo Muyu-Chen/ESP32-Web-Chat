@@ -10,5 +10,8 @@
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32"
   },
-  "idf.flashType": "UART"
+  "idf.flashType": "UART",
+  "files.associations": {
+    "sdmmc_cmd.h": "c"
+  }
 }
