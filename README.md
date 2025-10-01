@@ -1,119 +1,151 @@
-| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-P4 | ESP32-S2 | ESP32-S3 |
-| ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | -------- | -------- | -------- |
+# ESP32-Chat  
 
-# Simple HTTP File Server Example
+此项目是基于esp-32开发的服务器、客户端一体聊天网站。访问服务器ip即可直接加入聊天室。无需外部互联网，适用于无网环境中的聊天，包括但不限于飞机、户外、封闭的教室等等情况。请注意，若在飞机上使用，请使用民航局要求的射电设备。  
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+## 🚀 功能特性
 
-HTTP file server example demonstrates file serving with both upload and download capability, using the `esp_http_server` component of ESP-IDF. This example can use one of the following options for data storage:
+- 🔥 **WiFi热点模式** - ESP32创建独立WiFi网络
+- 💬 **实时WebSocket通信** - 低延迟消息传输
+- 🖥️ **响应式Web界面** - 支持多设备同时聊天
+- 📱 **跨平台支持** - 任何有WiFi和浏览器的设备都可连接
+- 🔄 **消息历史** - 自动保存最近100条消息
+- ❤️ **心跳检测** - 自动检测并清理断开的连接
+- 🌐 **DNS劫持** - 任何域名都会重定向到聊天界面
+- ⚡ **零配置** - 开箱即用，无需复杂设置
 
-- SPIFFS filesystem in SPI Flash. This option works on any ESP development board without any extra hardware.
+## 📋 系统规格
 
-- FAT filesystem on an SD card. Both SDSPI and SDMMC drivers are supported. You need a development board with an SD card slot to use this option.
+### 硬件要求
+- ESP32开发板 (支持WiFi功能)
+- USB数据线 (用于烧录程序)
+- 5V电源 (可选，用于独立运行)
 
-The following URIs are provided by the server:
+### 软件要求
+- ESP-IDF 开发环境（vscode中）
+- 或 Arduino IDE + ESP32插件
+- 现代Web浏览器 (Chrome/Firefox/Safari/Edge)
 
-| URI                  | Method  | Description                                                                               |
-|----------------------|---------|-------------------------------------------------------------------------------------------|
-|`index.html`          | GET     | Redirects to `/`                                                                          |
-|`favicon.ico`         | GET     | Browsers use this path to retrieve page icon which is embedded in flash                   |
-|`/`                   | GET     | Responds with webpage displaying list of files on the filesystem and form for uploading new files |
-|`/<file path>`        | GET     | For downloading files stored on the filesystem                                                    |
-|`/upload/<file path>` | POST    | For uploading files on to the filesystem. Files are sent as body of HTTP post requests            |
-|`/delete/<file path>` | POST    | Command for deleting a file from the filesystem                                                   |
+### 系统参数
+- **WiFi网络名称**: `ESPChat` 位于src/main.c中
+- **WiFi密码**: `esp-chat` 位于src/main.c中
+- **访问IP**: `192.168.4.1`（使用“登陆到网络”功能实现自动跳转）
+- **最大连接数**: 10个WebSocket连接，可在esp-idf中修改
+- **消息缓存**: 100条历史消息
+- **心跳间隔**: 30秒
 
-File server implementation can be found under `main/file_server.c`. `main/upload_script.html` has some HTML, JavaScript and Ajax content used for file uploading, which is embedded in the flash image and used as it is when generating the home page of the file server.
 
-Note that the default `/index.html` and `/favicon.ico` files can be overridden by uploading files with same name to the filesystem.
+## 🛠️ 安装步骤
 
-## How to use the example
-
-### Wi-Fi/Ethernet connection
-```
-idf.py menuconfig
-```
-Open the project configuration menu (`idf.py menuconfig`) to configure Wi-Fi or Ethernet. See "Establishing Wi-Fi or Ethernet Connection" section in [examples/protocols/README.md](../../README.md) for more details.
-
-### SD card (optional)
-
-By default the example uses SPIFFS filesystem in SPI flash for file storage.
-
-To use an SD card for file storage instead, open the project configuration menu (`idf.py menuconfig`) and enter "File_serving example menu". Then enable "Use SD card for file storage" (`CONFIG_EXAMPLE_MOUNT_SD_CARD`) option.
-
-SD cards can be used either over SPI interface (on all ESP chips) or over SDMMC interface (on ESP32 and ESP32-S3). To use SDMMC interface, enable "Use SDMMC host" (`CONFIG_EXAMPLE_USE_SDMMC_HOST`) option. To use SPI interface, disable this option.
-
-GPIO pins used to connect the SD card can be configured for the SPI interface (on all chips), or for SDMMC interface on chips where it uses GPIO matrix (ESP32-S3). This can be done in "SD card pin configuration" submenu.
-
-The example will be able to mount only cards formatted using FAT32 filesystem. If the card is formatted as exFAT or some other filesystem, you have an option to format it in the example code — "Format the card if mount failed" (`CONFIG_EXAMPLE_FORMAT_IF_MOUNT_FAILED`).
-
-For more information on pin configuration for SDMMC and SDSPI, check related examples: [sdmmc](../../../storage/sd_card/sdmmc/README.md), [sdspi](../../../storage/sd_card/sdmmc/README.md).
-
-### Build and Flash
-
-Build the project and flash it to the board, then run monitor tool to view serial output:
-
-```
-idf.py -p PORT flash monitor
-```
-
-(Replace PORT with the name of the serial port to use.)
-
-(To exit the serial monitor, type ``Ctrl-]``.)
-
-See the Getting Started Guide for full steps to configure and use ESP-IDF to build projects.
-
-### Working with the example
-
-1. Note down the IP assigned to your ESP module. The IP address is logged by the example as follows:
-
-   ```
-   I (5424) example_connect: - IPv4 address: 192.168.1.100
-   I (5424) example_connect: - IPv6 address:    fe80:0000:0000:0000:86f7:03ff:fec0:1620, type: ESP_IP6_ADDR_IS
+1. **克隆项目**
+   ```bash
+   git clone https://github.com/your-username/esp32-chat.git
+   cd esp32-chat
    ```
 
-   The following steps assume that IP address 192.168.1.100 was assigned.
+2. **配置WiFi**
+   - 打开配置文件
+   - 修改WiFi名称和密码
+   ```cpp
+#define EXAMPLE_ESP_WIFI_SSID      "ESPChat"
+#define EXAMPLE_ESP_WIFI_PASS      "esp-chat"
+   ```
 
-2. Test the example interactively in a web browser. The default port is 80.
+3. **上传代码**
+   - 连接ESP32到电脑
+   - 选择正确的开发板和端口
+   - 编译并上传代码
 
-    1. Open path http://192.168.1.100/ or http://192.168.1.100/index.html to see an HTML page with list of files on the server. The page will initially be empty.
-    2. Use the file upload form on the webpage to select and upload a file to the server.
-    3. Click a file link to download / open the file on browser (if supported).
-    4. Click the delete link visible next to each file entry to delete them.
+4. **访问聊天室**
+   - 打开串口监视器查看IP地址
+   - 在浏览器中访问显示的IP地址
 
-3. Test the example using curl:
+## 连接步骤
 
-    1. `myfile.html` can be uploaded to `/path/on/device/myfile_copy.html` using:
-       ```
-       curl -X POST --data-binary @myfile.html 192.168.43.130:80/upload/path/on/device/myfile_copy.html
-       ```
+1. **启动设备**
+   - 给ESP32供电
+   - 等待约10秒完成启动
 
-    2. Download the uploaded file back:
-       ```
-       curl 192.168.43.130:80/path/on/device/myfile_copy.html > myfile_copy.html`
-       ```
+2. **连接WiFi**
+   - 在手机/电脑WiFi列表中找到 `ESPChat`
+   - 输入密码：`esp-chat`
 
-    3. Compare the copy with the original using `cmp myfile.html myfile_copy.html`
+3. **打开聊天室**
+   - 打开浏览器访问：`http://192.168.4.1`
+   - 或访问任意网址（会自动跳转）
 
+4. **开始聊天**
+   - 输入昵称
+   - 发送消息与其他用户实时交流
 
-## Note
-
-Browsers often send large header fields when an HTML form is submit. Therefore, for the purpose of this example, `HTTPD_MAX_REQ_HDR_LEN` has been increased to 1024 in `sdkconfig.defaults`. User can adjust this value as per their requirement, keeping in mind the memory constraint of the hardware in use.
-
-## Example Output
+## 📁 项目结构
 
 ```
-I (5583) example_connect: Got IPv6 event: Interface "example_connect: sta" address: fe80:0000:0000:0000:266f:28ff:fe80:2c74, type: ESP_IP6_ADDR_IS_LINK_LOCAL
-I (5583) example_connect: Connected to example_connect: sta
-I (5593) example_connect: - IPv4 address: 192.168.194.219
-I (5593) example_connect: - IPv6 address: fe80:0000:0000:0000:266f:28ff:fe80:2c74, type: ESP_IP6_ADDR_IS_LINK_LOCAL
-I (5603) example: Initializing SPIFFS
-I (5723) example: Partition size: total: 896321, used: 0
-I (5723) file_server: Starting HTTP Server on port: '80'
-I (28933) file_server: Receiving file : /test.html...
-I (28933) file_server: Remaining size : 574
-I (28943) file_server: File reception complete
-I (28993) file_server: Found file : test.html (574 bytes)
-I (35943) file_server: Sending file : /test.html (574 bytes)...
-I (35953) file_server: File sending complete
-I (45363) file_server: Deleting file : /test.html
+esp32-chat/
+├── src/
+│   ├── main.cpp          # 主程序代码
+│   ├── wifi_manager.cpp  # WiFi管理
+│   └── web_server.cpp    # Web服务器
+├── data/
+│   ├── index.html        # 聊天界面
+│   ├── style.css         # 样式文件
+│   └── script.js         # 前端脚本
+├── lib/                  # 第三方库
+├── platformio.ini        # 项目配置
+└── README.md
 ```
+
+## ⚙️ 配置选项
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| 服务器端口 | 80 | Web服务器端口 |
+| 最大连接数 | 10 | 同时在线用户数 |
+| 消息缓存 | 50 | 历史消息保存数量 |
+
+## 🔧 故障排除
+
+### 常见问题
+
+**Q: 无法连接WiFi**
+- 检查WiFi名称和密码是否正确，位于src/main.c中
+  ```c
+    #define EXAMPLE_ESP_WIFI_SSID      "ESPChat"
+    #define EXAMPLE_ESP_WIFI_PASS      "esp-chat"
+  ```
+- 确认WiFi信号强度足够
+- 重启ESP32设备
+
+**Q: 网页无法访问**
+- 确认设备已成功连接WiFi
+- 检查IP地址是否正确
+- 尝试关闭防火墙
+
+**Q: 消息发送失败**
+- 检查网络连接
+- 刷新网页重试
+- 查看串口输出错误信息
+
+## 🤝 贡献指南
+
+欢迎贡献代码！请遵循以下步骤：
+
+1. Fork 项目
+2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 创建 Pull Request
+
+## 📝 更新日志
+
+### v1.0.0 (2025-10-01)
+- 🎉 首次发布
+- ✨ 基础聊天功能
+- 🌐 Web界面支持
+- 📡 WiFi连接管理
+
+## 📄 许可证
+
+本项目采用 Apache 2.0 许可证
+
+
+⭐ 如果这个项目对你有帮助，请给个星标支持！
