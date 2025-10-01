@@ -46,8 +46,8 @@
    - 打开配置文件
    - 修改WiFi名称和密码
    ```cpp
-#define EXAMPLE_ESP_WIFI_SSID      "ESPChat"
-#define EXAMPLE_ESP_WIFI_PASS      "esp-chat"
+      #define EXAMPLE_ESP_WIFI_SSID      "ESPChat"
+      #define EXAMPLE_ESP_WIFI_PASS      "esp-chat"
    ```
 
 3. **上传代码**
