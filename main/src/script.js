@@ -1,4 +1,4 @@
-'''const loginContainer = document.getElementById('login-container');
+const loginContainer = document.getElementById('login-container');
 const chatContainer = document.getElementById('chat-container');
 const joinBtn = document.getElementById('join-btn');
 const nicknameInput = document.getElementById('nickname');
@@ -34,6 +34,28 @@ if (!userId) {
 
 nicknameInput.value = localStorage.getItem('esp-chat-nickname') || `User${Math.floor(Math.random() * 1000)}`;
 
+// 消息存储管理
+const MESSAGE_STORAGE_KEY = 'esp-chat-messages';
+const MESSAGE_IDS_KEY = 'esp-chat-message-ids';
+
+// 初始化已显示消息的 ID 集合
+let displayedMessageIds = new Set(JSON.parse(localStorage.getItem(MESSAGE_IDS_KEY) || '[]'));
+
+// 保存消息到 localStorage
+function saveMessage(msg) {
+    try {
+        const messages = JSON.parse(localStorage.getItem(MESSAGE_STORAGE_KEY) || '[]');
+        messages.push(msg);
+        localStorage.setItem(MESSAGE_STORAGE_KEY, JSON.stringify(messages));
+        
+        // 保存消息 ID 用于防重复
+        displayedMessageIds.add(msg.id);
+        localStorage.setItem(MESSAGE_IDS_KEY, JSON.stringify(Array.from(displayedMessageIds)));
+    } catch (e) {
+        console.error('Error saving message to localStorage:', e);
+    }
+}
+
 joinBtn.addEventListener('click', () => {
     const nickname = nicknameInput.value.trim();
     if (nickname) {
@@ -53,28 +75,46 @@ joinBtn.addEventListener('click', () => {
 });
 
 function showMessage(msg) {
+    // 检查消息是否已经显示过（防重复）
+    if (msg.id && displayedMessageIds.has(msg.id)) {
+        console.log('Message already displayed, skipping:', msg.id);
+        return;
+    }
+    
+    const isMine = msg.from === userId;
+    
     const item = document.createElement('div');
-    item.classList.add('message');
+    item.classList.add('message-row');
+    if (isMine) {
+        item.classList.add('message-row-mine');
+    }
+    
+    const bubble = document.createElement('div');
+    bubble.classList.add('message-bubble');
+    if (isMine) {
+        bubble.classList.add('message-bubble-mine');
+    }
     
     const from = document.createElement('div');
     from.classList.add('from');
     from.textContent = msg.name;
 
     const data = document.createElement('div');
+    data.classList.add('message-content');
     data.textContent = msg.data;
 
     const timestamp = document.createElement('span');
     timestamp.classList.add('timestamp');
     timestamp.textContent = new Date(msg.timestamp * 1000).toLocaleTimeString();
 
-    if (msg.from === userId) {
-        item.classList.add('mine');
-    }
-
-    item.appendChild(from);
-    item.appendChild(data);
-    item.appendChild(timestamp);
+    bubble.appendChild(from);
+    bubble.appendChild(data);
+    bubble.appendChild(timestamp);
+    item.appendChild(bubble);
     messages.prepend(item);
+    
+    // 保存消息到 localStorage
+    saveMessage(msg);
 }
 
 function showSystemMessage(text) {
@@ -105,6 +145,13 @@ function connect() {
             }
 
             console.log('Parsed message:', msg);
+            
+            // 检查消息 ID，如果已经显示过则跳过（防重复）
+            if (msg.id && displayedMessageIds.has(msg.id)) {
+                console.log('Message ID already exists, skipping:', msg.id);
+                return;
+            }
+            
             if (msg.to && msg.to.users && !msg.to.all) {
                 if (msg.to.users.includes(userId) || msg.from === userId) {
                     showMessage(msg);
@@ -171,4 +218,3 @@ themeSwitch.addEventListener('change', (e) => {
 const savedTheme = localStorage.getItem('theme');
 // Default to dark mode if no theme is saved
 setTheme(savedTheme === 'light' ? false : true);
-'''

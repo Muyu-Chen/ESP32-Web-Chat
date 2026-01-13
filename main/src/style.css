@@ -1,4 +1,4 @@
-''':root {
+:root {
     --primary-color: #007bff;
     --background-color: #ffffff;
     --surface-color: #f8f9fa;
@@ -69,41 +69,53 @@ body {
     gap: 12px;
 }
 
-.message {
+.message-row {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-start;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+.message-row-mine {
+    justify-content: flex-end;
+}
+
+.message-bubble {
     padding: 10px 15px;
     border-radius: 18px;
-    max-width: 75%;
+    max-width: 70%;
     word-wrap: break-word;
     line-height: 1.4;
     background-color: var(--other-message-color);
     color: var(--other-message-text-color);
-    align-self: flex-start;
 }
 
-.message.mine {
+.message-bubble-mine {
     background-color: var(--my-message-color);
     color: var(--my-message-text-color);
-    align-self: flex-end;
 }
 
-.message .from {
+.message-content {
+    margin: 5px 0;
+}
+
+.from {
     font-weight: bold;
     font-size: 0.9em;
     margin-bottom: 5px;
     color: var(--primary-color);
 }
 
-.message.mine .from {
+.message-bubble-mine .from {
     color: #e0e0e0;
 }
 
-.message .timestamp {
+.timestamp {
     font-size: 0.75em;
     color: #888;
-    margin-left: 10px;
-    float: right;
-    clear: both;
-    padding-top: 4px;
+    margin-top: 4px;
+    display: block;
 }
 
 .system {
@@ -263,4 +275,3 @@ input:checked + .slider:before {
 .slider.round:before {
     border-radius: 50%;
 }
-'''
