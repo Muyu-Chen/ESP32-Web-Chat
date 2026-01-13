@@ -1,4 +1,4 @@
-'''<!DOCTYPE html>
+<!DOCTYPE html>
 <html>
 <head>
     <title>ESP32 Chat</title>
@@ -19,6 +19,7 @@
 
     <div id="chat-container">
         <div id="header">
+            <button id="menu-btn" style="position: absolute; left: 15px; background: none; border: none; cursor: pointer; font-size: 1.2em;">☰</button>
             <span id="chat-title">ESP32 Chat</span>
             <div class="theme-switch-wrapper">
                 <label class="theme-switch" for="checkbox">
@@ -35,6 +36,28 @@
         </form>
     </div>
 
+    <!-- 对话列表界面 -->
+    <div id="conversation-list-container" style="display: none;">
+        <div id="header">
+            <button id="back-btn" style="position: absolute; left: 15px; background: none; border: none; cursor: pointer; font-size: 1.2em;">←</button>
+            <span id="list-title">Conversations</span>
+            <button id="create-group-btn" style="position: absolute; right: 15px; background: none; border: none; cursor: pointer; font-size: 1.5em;">+</button>
+        </div>
+        <div id="conversation-list"></div>
+    </div>
+
+    <!-- 创建群聊对话框 -->
+    <div id="create-group-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+        <div id="create-group-content" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border-radius: 12px; max-width: 90%; max-height: 80%; overflow-y: auto;">
+            <h3>Create Group Chat</h3>
+            <div id="user-select-list"></div>
+            <div style="margin-top: 20px; display: flex; gap: 10px;">
+                <button id="create-group-confirm" style="flex: 1; padding: 12px; background-color: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer;">Create</button>
+                <button id="create-group-cancel" style="flex: 1; padding: 12px; background-color: #ccc; color: black; border: none; border-radius: 8px; cursor: pointer;">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <script src="script.js"></script>
 </body>
-</html>'''
+</html>
