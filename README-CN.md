@@ -1,0 +1,168 @@
+# ESP32-Web-Chat
+
+这是一个基于 ESP32 的本地聊天网站，集成了服务器与客户端。连接到设备创建的 Wi-Fi 热点后，直接在浏览器中访问即可加入聊天室。
+
+英文说明请见 [README.md](README.md)。
+
+## 功能特性
+
+- Wi-Fi 热点模式：ESP32 创建独立 Wi-Fi 网络
+- 实时 WebSocket 通信：低延迟消息传输
+- 响应式 Web 界面：支持多设备同时聊天
+- 跨平台支持：任何具备 Wi-Fi 和浏览器的设备都可连接
+- 消息历史：自动保存最近 100 条消息
+- 心跳检测：自动检测并清理断开的连接
+- DNS 重定向：任意域名请求都会跳转到聊天界面
+- 零配置：开箱即用，无需复杂设置
+
+## 系统规格
+
+### 硬件要求
+
+- ESP32 开发板（支持 Wi-Fi 功能）
+- USB 数据线（用于烧录程序）
+- 5V 电源（可选，用于独立运行）
+
+### 软件要求
+
+- ESP-IDF 开发环境
+- 现代 Web 浏览器（Chrome / Firefox / Safari / Edge）
+
+### 系统参数
+
+- Wi-Fi 网络名称：`ESPChat`（位于 `main/main.c`）
+- Wi-Fi 密码：`esp-chat`（位于 `main/main.c`）
+- 默认访问 IP：`192.168.4.1`
+- 最大 WebSocket 连接数：10
+- AP 最大接入设备数：8
+- 消息缓存：100 条历史消息
+- 心跳间隔：30 秒
+
+## 安装步骤
+
+1. 克隆项目
+
+   ```bash
+   git clone https://github.com/your-username/esp32-chat.git
+   cd esp32-chat
+   ```
+
+2. 配置 Wi-Fi
+
+   打开 `main/main.c`，按需修改 Wi-Fi 名称和密码：
+
+   ```c
+   #define EXAMPLE_ESP_WIFI_SSID      "ESPChat"
+   #define EXAMPLE_ESP_WIFI_PASS      "esp-chat"
+   ```
+
+3. 烧录程序
+
+   - 将 ESP32 连接到电脑
+   - 选择正确的开发板和端口
+   - 编译并上传代码
+
+4. 访问聊天室
+
+   - 打开串口监视器查看 IP 地址
+   - 在浏览器中访问显示的地址
+
+## 连接步骤
+
+1. 启动设备
+
+   - 给 ESP32 供电
+   - 等待约 10 秒完成启动
+
+2. 连接 Wi-Fi
+
+   - 在手机或电脑的 Wi-Fi 列表中找到 `ESPChat`
+   - 输入密码：`esp-chat`
+
+3. 打开聊天室
+
+   - 在浏览器中访问 `http://192.168.4.1`
+   - 或访问任意网址（会自动跳转）
+
+4. 开始聊天
+
+   - 输入昵称
+   - 发送消息，与其他用户实时交流
+
+## 项目结构
+
+```text
+ESP32-Web-Chat/
+├── main/
+│   ├── main.c
+│   ├── mount.c
+│   ├── favicon.ico
+│   └── src/
+│       ├── index.html
+│       ├── style.css
+│       └── script.js
+├── CMakeLists.txt
+├── sdkconfig.defaults
+├── partitions_example.csv
+├── LICENSE
+├── README.md
+└── README-CN.md
+```
+
+## 配置选项
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| 服务器端口 | 80 | Web 服务器端口 |
+| 最大连接数 | 10 | 同时在线用户数 |
+| 消息缓存 | 100 | 历史消息保存数量 |
+| 心跳间隔 | 30 秒 | 连接存活检测周期 |
+
+## 故障排除
+
+### 常见问题
+
+**Q: 无法连接 Wi-Fi**
+
+- 检查 `main/main.c` 中的 Wi-Fi 名称和密码是否正确：
+
+  ```c
+  #define EXAMPLE_ESP_WIFI_SSID      "ESPChat"
+  #define EXAMPLE_ESP_WIFI_PASS      "esp-chat"
+  ```
+
+- 确认 Wi-Fi 信号强度足够
+- 重启 ESP32 设备
+
+**Q: 网页无法访问**
+
+- 确认设备已成功连接到 Wi-Fi
+- 检查 IP 地址是否正确
+- 尝试关闭本机防火墙后再访问
+
+**Q: 消息发送失败**
+
+- 检查网络连接
+- 刷新网页后重试
+- 查看串口输出中的错误信息
+
+## 贡献指南
+
+欢迎贡献代码，请按以下步骤进行：
+
+1. Fork 本项目
+2. 创建功能分支：`git checkout -b feature/AmazingFeature`
+3. 提交更改：`git commit -m 'Add some AmazingFeature'`
+4. 推送分支：`git push origin feature/AmazingFeature`
+5. 创建 Pull Request
+
+## TODO
+
+- 支持不改源码即可配置 Wi-Fi 名称和密码
+- 支持消息历史持久化
+- 增强异常断线后的重连与提示
+- 补充更完整的 ESP-IDF 构建与烧录说明
+
+## 许可证
+
+本项目采用 Apache 2.0 许可证。
