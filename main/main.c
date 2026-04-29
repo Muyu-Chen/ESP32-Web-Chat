@@ -370,11 +370,11 @@ static httpd_handle_t start_webserver(void)
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Serving root page");
-    extern const unsigned char src_index_html_start[] asm("_binary_src_index_html_start");
-    extern const unsigned char src_index_html_end[]   asm("_binary_src_index_html_end");
-    const size_t index_html_size = (src_index_html_end - src_index_html_start);
+    extern const unsigned char index_html_start[] asm("_binary_index_html_start");
+    extern const unsigned char index_html_end[]   asm("_binary_index_html_end");
+    const size_t index_html_size = (index_html_end - index_html_start);
     httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, (const char *)src_index_html_start, index_html_size);
+    httpd_resp_send(req, (const char *)index_html_start, index_html_size);
     return ESP_OK;
 }
 
@@ -391,22 +391,22 @@ static esp_err_t favicon_get_handler(httpd_req_t *req)
 static esp_err_t style_get_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Serving style.css");
-    extern const unsigned char src_style_css_start[] asm("_binary_src_style_css_start");
-    extern const unsigned char src_style_css_end[]   asm("_binary_src_style_css_end");
-    const size_t style_css_size = (src_style_css_end - src_style_css_start);
+    extern const unsigned char style_css_start[] asm("_binary_style_css_start");
+    extern const unsigned char style_css_end[]   asm("_binary_style_css_end");
+    const size_t style_css_size = (style_css_end - style_css_start);
     httpd_resp_set_type(req, "text/css");
-    httpd_resp_send(req, (const char *)src_style_css_start, style_css_size);
+    httpd_resp_send(req, (const char *)style_css_start, style_css_size);
     return ESP_OK;
 }
 
 static esp_err_t script_get_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Serving script.js");
-    extern const unsigned char src_script_js_start[] asm("_binary_src_script_js_start");
-    extern const unsigned char src_script_js_end[]   asm("_binary_src_script_js_end");
-    const size_t script_js_size = (src_script_js_end - src_script_js_start);
+    extern const unsigned char script_js_start[] asm("_binary_script_js_start");
+    extern const unsigned char script_js_end[]   asm("_binary_script_js_end");
+    const size_t script_js_size = (script_js_end - script_js_start);
     httpd_resp_set_type(req, "application/javascript");
-    httpd_resp_send(req, (const char *)src_script_js_start, script_js_size);
+    httpd_resp_send(req, (const char *)script_js_start, script_js_size);
     return ESP_OK;
 }
 
