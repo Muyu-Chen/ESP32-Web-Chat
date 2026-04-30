@@ -8,52 +8,97 @@
 </head>
 <body>
     <div id="login-container">
-        <div id="header">
+        <div class="header">
             <h2>ESP32 Chat</h2>
         </div>
         <div class="login-box">
-            <input type="text" id="nickname" placeholder="Enter your nickname" autocomplete="off">
+            <p class="login-intro">Join the local room hosted by this ESP32.</p>
+            <input type="text" id="nickname" placeholder="Enter your nickname" autocomplete="off" maxlength="31">
             <button id="join-btn">Enter Chat</button>
+            <small id="login-device-id"></small>
         </div>
     </div>
 
     <div id="chat-container">
-        <div id="header">
-            <button id="menu-btn" style="position: absolute; left: 15px; background: none; border: none; cursor: pointer; font-size: 1.2em;">☰</button>
-            <span id="chat-title">ESP32 Chat</span>
+        <div class="header">
+            <button id="menu-btn" class="icon-button" type="button">☰</button>
+            <div class="title-stack">
+                <span id="chat-title">Group Chat</span>
+                <span id="connection-status">Disconnected</span>
+            </div>
             <div class="theme-switch-wrapper">
                 <label class="theme-switch" for="checkbox">
                     <input type="checkbox" id="checkbox" />
                     <div class="slider round"></div>
                 </label>
             </div>
-            <span id="chat-nickname"></span>
+            <span id="chat-nickname" title="Current user"></span>
         </div>
         <div id="messages"></div>
         <form id="form" onsubmit="sendMessage(event)">
-            <input type="text" id="message-input" autocomplete="off" placeholder="Type a message..."/>
+            <input type="text" id="message-input" autocomplete="off" placeholder="Type a message..." maxlength="256"/>
             <button id="send">Send</button>
         </form>
     </div>
 
     <!-- 对话列表界面 -->
-    <div id="conversation-list-container" style="display: none;">
-        <div id="header">
-            <button id="back-btn" style="position: absolute; left: 15px; background: none; border: none; cursor: pointer; font-size: 1.2em;">←</button>
+    <div id="conversation-list-container">
+        <div class="header">
+            <button id="back-btn" class="icon-button" type="button">←</button>
             <span id="list-title">Conversations</span>
-            <button id="create-group-btn" style="position: absolute; right: 15px; background: none; border: none; cursor: pointer; font-size: 1.5em;">+</button>
+            <button id="settings-btn" class="header-text-button" type="button">Settings</button>
+            <button id="create-group-btn" class="icon-button icon-button-right" type="button">+</button>
         </div>
         <div id="conversation-list"></div>
     </div>
 
     <!-- 创建群聊对话框 -->
-    <div id="create-group-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
-        <div id="create-group-content" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border-radius: 12px; max-width: 90%; max-height: 80%; overflow-y: auto;">
+    <div id="create-group-modal">
+        <div id="create-group-content">
             <h3>Create Group Chat</h3>
+            <p>Select online users to invite.</p>
             <div id="user-select-list"></div>
-            <div style="margin-top: 20px; display: flex; gap: 10px;">
-                <button id="create-group-confirm" style="flex: 1; padding: 12px; background-color: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer;">Create</button>
-                <button id="create-group-cancel" style="flex: 1; padding: 12px; background-color: #ccc; color: black; border: none; border-radius: 8px; cursor: pointer;">Cancel</button>
+            <div class="modal-actions">
+                <button id="create-group-confirm" type="button">Create</button>
+                <button id="create-group-cancel" type="button">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 后台设置 -->
+    <div id="settings-modal">
+        <div id="settings-content">
+            <h3>ESP32 Settings</h3>
+            <p>Changes are stored on the ESP32 and apply after reboot.</p>
+            <label>
+                Admin password
+                <input type="password" id="settings-admin-password" autocomplete="current-password" placeholder="Default: admin">
+            </label>
+            <label>
+                Wi-Fi SSID
+                <input type="text" id="settings-ssid" maxlength="32">
+            </label>
+            <label>
+                New Wi-Fi password
+                <input type="password" id="settings-wifi-password" autocomplete="new-password" placeholder="Leave blank to keep current password">
+            </label>
+            <label class="settings-checkbox">
+                <input type="checkbox" id="settings-open-network">
+                Create an open network without password
+            </label>
+            <label>
+                Wi-Fi channel
+                <input type="number" id="settings-channel" min="1" max="13">
+            </label>
+            <label>
+                New admin password
+                <input type="password" id="settings-new-admin-password" autocomplete="new-password" placeholder="Leave blank to keep current admin password">
+            </label>
+            <div id="settings-status"></div>
+            <div class="modal-actions">
+                <button id="settings-save-reboot" type="button">Save & Reboot</button>
+                <button id="settings-save" type="button">Save</button>
+                <button id="settings-cancel" type="button">Cancel</button>
             </div>
         </div>
     </div>
