@@ -1,220 +1,872 @@
 const loginContainer = document.getElementById('login-container');
 const chatContainer = document.getElementById('chat-container');
+const conversationListContainer = document.getElementById('conversation-list-container');
+const createGroupModal = document.getElementById('create-group-modal');
+const settingsModal = document.getElementById('settings-modal');
+
 const joinBtn = document.getElementById('join-btn');
 const nicknameInput = document.getElementById('nickname');
 const chatNickname = document.getElementById('chat-nickname');
+const loginDeviceId = document.getElementById('login-device-id');
 const themeSwitch = document.getElementById('checkbox');
+const connectionStatus = document.getElementById('connection-status');
+const chatTitle = document.getElementById('chat-title');
 
 const messages = document.getElementById('messages');
 const form = document.getElementById('form');
 const input = document.getElementById('message-input');
 
-let ws;
-function generateUUID() { // Public Domain/MIT
-    var d = new Date().getTime();//Timestamp
-    var d2 = ((typeof performance !== 'undefined') && performance.now && (performance.now()*1000)) || 0;//Time in microseconds since page-load or 0 if unsupported
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        var r = Math.random() * 16;//random number between 0 and 16
-        if(d > 0){//Use timestamp until depleted
-            r = (d + r)%16 | 0;
-            d = Math.floor(d/16);
-        } else {//Use microseconds since page-load if supported
-            r = (d2 + r)%16 | 0;
-            d2 = Math.floor(d2/16);
+const menuBtn = document.getElementById('menu-btn');
+const backBtn = document.getElementById('back-btn');
+const createGroupBtn = document.getElementById('create-group-btn');
+const createGroupConfirm = document.getElementById('create-group-confirm');
+const createGroupCancel = document.getElementById('create-group-cancel');
+const settingsBtn = document.getElementById('settings-btn');
+const settingsAdminPassword = document.getElementById('settings-admin-password');
+const settingsSsid = document.getElementById('settings-ssid');
+const settingsWifiPassword = document.getElementById('settings-wifi-password');
+const settingsOpenNetwork = document.getElementById('settings-open-network');
+const settingsChannel = document.getElementById('settings-channel');
+const settingsNewAdminPassword = document.getElementById('settings-new-admin-password');
+const settingsStatus = document.getElementById('settings-status');
+const settingsSave = document.getElementById('settings-save');
+const settingsSaveReboot = document.getElementById('settings-save-reboot');
+const settingsCancel = document.getElementById('settings-cancel');
+const conversationList = document.getElementById('conversation-list');
+const userSelectList = document.getElementById('user-select-list');
+
+const STORAGE = {
+    userId: 'esp-chat-uuid',
+    nickname: 'esp-chat-nickname',
+    messages: 'esp-chat-messages',
+    conversations: 'esp-chat-conversations',
+    lastSeenId: 'esp-chat-last-seen-id',
+    outbox: 'esp-chat-outbox',
+    theme: 'theme'
+};
+
+const MAX_LOCAL_MESSAGES = 300;
+const MAX_OUTBOX_MESSAGES = 30;
+
+let ws = null;
+let hasJoined = false;
+let reconnectTimer = null;
+let reconnectDelayMs = 1000;
+let allMessages = [];
+let conversations = {};
+let onlineUsers = new Map();
+let outbox = [];
+let lastSeenId = 0;
+
+function generateUUID() {
+    let d = new Date().getTime();
+    let d2 = ((typeof performance !== 'undefined') && performance.now && (performance.now() * 1000)) || 0;
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        let r = Math.random() * 16;
+        if (d > 0) {
+            r = (d + r) % 16 | 0;
+            d = Math.floor(d / 16);
+        } else {
+            r = (d2 + r) % 16 | 0;
+            d2 = Math.floor(d2 / 16);
         }
         return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
     });
 }
 
-let userId = localStorage.getItem('esp-chat-uuid');
+function readJSON(key, fallback) {
+    try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+    } catch (error) {
+        console.warn(`Failed to parse ${key}:`, error);
+        return fallback;
+    }
+}
+
+function writeJSON(key, value) {
+    try {
+        localStorage.setItem(key, JSON.stringify(value));
+    } catch (error) {
+        console.warn(`Failed to store ${key}:`, error);
+    }
+}
+
+let userId = localStorage.getItem(STORAGE.userId);
 if (!userId) {
     userId = generateUUID();
-    localStorage.setItem('esp-chat-uuid', userId);
+    localStorage.setItem(STORAGE.userId, userId);
 }
 
-nicknameInput.value = localStorage.getItem('esp-chat-nickname') || `User${Math.floor(Math.random() * 1000)}`;
+nicknameInput.value = localStorage.getItem(STORAGE.nickname) || `User${Math.floor(Math.random() * 1000)}`;
+loginDeviceId.textContent = `Device ID: ${userId.slice(0, 8)}`;
 
-// 消息存储管理
-const MESSAGE_STORAGE_KEY = 'esp-chat-messages';
-const MESSAGE_IDS_KEY = 'esp-chat-message-ids';
+function defaultConversation() {
+    return {
+        id: 'global',
+        name: 'Group Chat',
+        type: 'global',
+        members: [],
+        lastPreview: 'Everyone connected to this ESP32',
+        updatedAt: 0
+    };
+}
 
-// 初始化已显示消息的 ID 集合
-let displayedMessageIds = new Set(JSON.parse(localStorage.getItem(MESSAGE_IDS_KEY) || '[]'));
+function loadState() {
+    allMessages = readJSON(STORAGE.messages, []).filter((msg) => msg && Number.isFinite(Number(msg.id)));
+    conversations = readJSON(STORAGE.conversations, {});
+    conversations.global = { ...defaultConversation(), ...(conversations.global || {}) };
+    outbox = readJSON(STORAGE.outbox, []);
+    lastSeenId = Number(localStorage.getItem(STORAGE.lastSeenId) || 0);
 
-// 保存消息到 localStorage
-function saveMessage(msg) {
-    try {
-        const messages = JSON.parse(localStorage.getItem(MESSAGE_STORAGE_KEY) || '[]');
-        messages.push(msg);
-        localStorage.setItem(MESSAGE_STORAGE_KEY, JSON.stringify(messages));
-        
-        // 保存消息 ID 用于防重复
-        displayedMessageIds.add(msg.id);
-        localStorage.setItem(MESSAGE_IDS_KEY, JSON.stringify(Array.from(displayedMessageIds)));
-    } catch (e) {
-        console.error('Error saving message to localStorage:', e);
+    const localMaxId = allMessages.reduce((maxId, msg) => Math.max(maxId, Number(msg.id) || 0), 0);
+    lastSeenId = Math.max(lastSeenId, localMaxId);
+    localStorage.setItem(STORAGE.lastSeenId, String(lastSeenId));
+}
+
+let currentConversation = defaultConversation();
+loadState();
+currentConversation = conversations.global;
+
+function saveMessages() {
+    allMessages = allMessages
+        .sort((a, b) => Number(a.id) - Number(b.id))
+        .slice(-MAX_LOCAL_MESSAGES);
+    writeJSON(STORAGE.messages, allMessages);
+}
+
+function saveConversations() {
+    writeJSON(STORAGE.conversations, conversations);
+}
+
+function saveOutbox() {
+    outbox = outbox.slice(-MAX_OUTBOX_MESSAGES);
+    writeJSON(STORAGE.outbox, outbox);
+}
+
+function rememberSeenId(id) {
+    const numericId = Number(id);
+    if (Number.isFinite(numericId) && numericId > lastSeenId) {
+        lastSeenId = numericId;
+        localStorage.setItem(STORAGE.lastSeenId, String(lastSeenId));
     }
 }
 
-joinBtn.addEventListener('click', () => {
-    const nickname = nicknameInput.value.trim();
-    if (nickname) {
-        localStorage.setItem('esp-chat-nickname', nickname);
-        chatNickname.textContent = `Logged in as: ${nickname}`;
-        
-        loginContainer.style.opacity = '0';
-        setTimeout(() => {
-            loginContainer.style.display = 'none';
-            chatContainer.classList.add('visible');
-            connect();
-        }, 500); // Match CSS transition duration
+function setStatus(state, label) {
+    connectionStatus.dataset.state = state;
+    connectionStatus.textContent = label;
+}
 
-    } else {
-        alert('Please enter a nickname.');
+function getNickname() {
+    return (localStorage.getItem(STORAGE.nickname) || nicknameInput.value || 'Guest').trim().slice(0, 31);
+}
+
+function targetUsers(msg) {
+    return msg && msg.to && Array.isArray(msg.to.users) ? msg.to.users : [];
+}
+
+function isMessageForMe(msg) {
+    if (!msg || msg.from === 'server') {
+        return true;
     }
-});
+    if (msg.from === userId || (msg.to && msg.to.all)) {
+        return true;
+    }
+    return targetUsers(msg).includes(userId);
+}
 
-function showMessage(msg) {
-    // 检查消息是否已经显示过（防重复）
-    if (msg.id && displayedMessageIds.has(msg.id)) {
-        console.log('Message already displayed, skipping:', msg.id);
+function conversationForMessage(msg) {
+    if (msg.type === 'newGroup' || msg.groupId) {
+        return msg.groupId;
+    }
+    if (msg.to && msg.to.all) {
+        return 'global';
+    }
+    if (msg.from === userId) {
+        return targetUsers(msg).find((id) => id !== userId) || 'global';
+    }
+    return msg.from || 'global';
+}
+
+function updateConversationFromMessage(msg) {
+    if (!msg || msg.type === 'error' || msg.type === 'onlineUsers') {
         return;
     }
-    
-    const isMine = msg.from === userId;
-    
+
+    const conversationId = conversationForMessage(msg);
+    const preview = msg.type === 'newGroup' ? msg.data : msg.data;
+    const updatedAt = Number(msg.timestamp) || Date.now() / 1000;
+
+    if (conversationId === 'global') {
+        conversations.global = {
+            ...defaultConversation(),
+            ...(conversations.global || {}),
+            lastPreview: preview || 'Group Chat',
+            updatedAt
+        };
+        return;
+    }
+
+    if (msg.type === 'newGroup' || msg.groupId) {
+        const members = Array.from(new Set([msg.from, ...targetUsers(msg)].filter(Boolean)));
+        conversations[conversationId] = {
+            id: conversationId,
+            name: msg.groupName || conversations[conversationId]?.name || 'Group Chat',
+            type: 'group',
+            members,
+            lastPreview: preview || 'New group',
+            updatedAt
+        };
+        return;
+    }
+
+    const otherId = conversationId;
+    const otherName = msg.from === userId
+        ? onlineUsers.get(otherId)?.name || conversations[otherId]?.name || otherId.slice(0, 8)
+        : msg.name || conversations[otherId]?.name || otherId.slice(0, 8);
+
+    conversations[otherId] = {
+        id: otherId,
+        name: otherName,
+        type: 'private',
+        members: [userId, otherId],
+        lastPreview: preview || 'Private chat',
+        updatedAt
+    };
+}
+
+function saveIncomingMessage(msg) {
+    rememberSeenId(msg.id);
+    if (!isMessageForMe(msg)) {
+        return false;
+    }
+
+    const id = Number(msg.id);
+    if (!Number.isFinite(id) || allMessages.some((stored) => Number(stored.id) === id)) {
+        return false;
+    }
+
+    allMessages.push(msg);
+    updateConversationFromMessage(msg);
+    saveMessages();
+    saveConversations();
+    return true;
+}
+
+function belongsToCurrentConversation(msg) {
+    if (currentConversation.type === 'global') {
+        return msg.type === 'text' && msg.to && msg.to.all;
+    }
+    if (currentConversation.type === 'group') {
+        return msg.groupId === currentConversation.id || (msg.type === 'newGroup' && msg.groupId === currentConversation.id);
+    }
+    if (currentConversation.type === 'private') {
+        return !msg.groupId &&
+            !(msg.to && msg.to.all) &&
+            ((msg.from === userId && targetUsers(msg).includes(currentConversation.id)) ||
+             (msg.from === currentConversation.id && targetUsers(msg).includes(userId)));
+    }
+    return false;
+}
+
+function formatTime(timestamp) {
+    const ts = Number(timestamp);
+    if (!Number.isFinite(ts) || ts <= 0) {
+        return '';
+    }
+    return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function createSystemElement(text) {
     const item = document.createElement('div');
-    item.classList.add('message-row');
-    if (isMine) {
-        item.classList.add('message-row-mine');
+    item.className = 'system';
+    item.textContent = text;
+    return item;
+}
+
+function createMessageElement(msg) {
+    if (msg.type === 'newGroup') {
+        return createSystemElement(msg.data || `${msg.name || 'Someone'} created ${msg.groupName || 'a group'}`);
     }
-    
+
+    const isMine = msg.from === userId;
+    const item = document.createElement('div');
+    item.className = `message-row${isMine ? ' message-row-mine' : ''}`;
+
     const bubble = document.createElement('div');
-    bubble.classList.add('message-bubble');
-    if (isMine) {
-        bubble.classList.add('message-bubble-mine');
-    }
-    
+    bubble.className = `message-bubble${isMine ? ' message-bubble-mine' : ''}`;
+
     const from = document.createElement('div');
-    from.classList.add('from');
-    from.textContent = msg.name;
+    from.className = 'from';
+    from.textContent = isMine ? 'Me' : (msg.name || 'Guest');
 
     const data = document.createElement('div');
-    data.classList.add('message-content');
-    data.textContent = msg.data;
+    data.className = 'message-content';
+    data.textContent = msg.data || '';
 
     const timestamp = document.createElement('span');
-    timestamp.classList.add('timestamp');
-    timestamp.textContent = new Date(msg.timestamp * 1000).toLocaleTimeString();
+    timestamp.className = 'timestamp';
+    timestamp.textContent = formatTime(msg.timestamp);
 
     bubble.appendChild(from);
     bubble.appendChild(data);
     bubble.appendChild(timestamp);
     item.appendChild(bubble);
-    messages.prepend(item);
-    
-    // 保存消息到 localStorage
-    saveMessage(msg);
+    return item;
+}
+
+function renderMessages() {
+    messages.innerHTML = '';
+    chatTitle.textContent = currentConversation.name;
+
+    const visibleMessages = allMessages
+        .filter(belongsToCurrentConversation)
+        .sort((a, b) => Number(a.id) - Number(b.id));
+
+    if (visibleMessages.length === 0) {
+        messages.appendChild(createSystemElement('No messages yet.'));
+        return;
+    }
+
+    visibleMessages.forEach((msg) => messages.appendChild(createMessageElement(msg)));
+    messages.scrollTop = messages.scrollHeight;
 }
 
 function showSystemMessage(text) {
-    const item = document.createElement('div');
-    item.classList.add('system');
-    item.textContent = text;
-    messages.prepend(item);
+    messages.appendChild(createSystemElement(text));
+    messages.scrollTop = messages.scrollHeight;
+}
+
+function conversationSubtitle(conversation) {
+    if (conversation.type === 'global') {
+        return `${onlineUsers.size} online`;
+    }
+    if (conversation.type === 'private') {
+        return onlineUsers.has(conversation.id) ? 'Online now' : 'Recent chat';
+    }
+    return `${conversation.members?.length || 0} members`;
+}
+
+function addConversationSection(title) {
+    const section = document.createElement('div');
+    section.className = 'conversation-section';
+    section.textContent = title;
+    conversationList.appendChild(section);
+}
+
+function addConversationItem(conversation) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'conversation-item';
+    if (conversation.id === currentConversation.id) {
+        item.classList.add('conversation-item-active');
+    }
+
+    const title = document.createElement('strong');
+    title.textContent = conversation.name;
+
+    const meta = document.createElement('span');
+    meta.textContent = conversation.lastPreview || conversationSubtitle(conversation);
+
+    const subtitle = document.createElement('small');
+    subtitle.textContent = conversationSubtitle(conversation);
+
+    item.appendChild(title);
+    item.appendChild(meta);
+    item.appendChild(subtitle);
+    item.addEventListener('click', () => {
+        currentConversation = conversation;
+        chatContainer.classList.add('visible');
+        conversationListContainer.classList.remove('visible');
+        renderMessages();
+        renderConversationList();
+    });
+
+    conversationList.appendChild(item);
+}
+
+function renderConversationList() {
+    conversationList.innerHTML = '';
+
+    addConversationSection(`Me: ${getNickname()} (${userId.slice(0, 8)})`);
+    addConversationItem(conversations.global);
+
+    addConversationSection('Online users');
+    const otherUsers = Array.from(onlineUsers.values()).filter((user) => user.id !== userId);
+    if (otherUsers.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'conversation-empty';
+        empty.textContent = 'No other users online yet.';
+        conversationList.appendChild(empty);
+    } else {
+        otherUsers
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .forEach((user) => {
+                conversations[user.id] = {
+                    id: user.id,
+                    name: user.name || user.id.slice(0, 8),
+                    type: 'private',
+                    members: [userId, user.id],
+                    lastPreview: conversations[user.id]?.lastPreview || 'Tap to start a private chat',
+                    updatedAt: conversations[user.id]?.updatedAt || 0
+                };
+                addConversationItem(conversations[user.id]);
+            });
+    }
+
+    const history = Object.values(conversations)
+        .filter((conversation) => conversation.id !== 'global')
+        .filter((conversation) => conversation.type === 'group' || !onlineUsers.has(conversation.id))
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+    if (history.length > 0) {
+        addConversationSection('History');
+        history.forEach(addConversationItem);
+    }
+
+    saveConversations();
+}
+
+function updateOnlineUsers(data) {
+    onlineUsers = new Map();
+    if (Array.isArray(data)) {
+        data.forEach((user) => {
+            if (user && user.id) {
+                onlineUsers.set(user.id, {
+                    id: user.id,
+                    name: user.name || user.id.slice(0, 8)
+                });
+            }
+        });
+    }
+
+    if (!onlineUsers.has(userId)) {
+        onlineUsers.set(userId, { id: userId, name: getNickname() });
+    }
+
+    renderConversationList();
+}
+
+function sendRaw(payload) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+        return true;
+    }
+    return false;
+}
+
+function sendControl(type, extra = {}) {
+    return sendRaw({
+        type,
+        from: userId,
+        name: getNickname(),
+        timestamp: Math.floor(Date.now() / 1000),
+        ...extra
+    });
+}
+
+function queueMessage(message) {
+    outbox.push(message);
+    saveOutbox();
+    showSystemMessage('Message queued until the ESP32 connection returns.');
+}
+
+function flushOutbox() {
+    if (!ws || ws.readyState !== WebSocket.OPEN || outbox.length === 0) {
+        return;
+    }
+
+    const pending = [...outbox];
+    outbox = [];
+    saveOutbox();
+    pending.forEach((message) => {
+        message.timestamp = Math.floor(Date.now() / 1000);
+        sendRaw(message);
+    });
+    showSystemMessage(`Sent ${pending.length} queued message${pending.length > 1 ? 's' : ''}.`);
+}
+
+function handleIncoming(event) {
+    try {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === 'ping') {
+            sendRaw({ type: 'pong', from: userId });
+            return;
+        }
+
+        if (Number.isFinite(Number(msg.id))) {
+            rememberSeenId(msg.id);
+        }
+
+        if (msg.type === 'onlineUsers') {
+            updateOnlineUsers(msg.data);
+            return;
+        }
+
+        if (msg.type === 'error') {
+            showSystemMessage(`Server error: ${msg.data || msg.code || 'unknown error'}`);
+            return;
+        }
+
+        if (msg.type !== 'text' && msg.type !== 'newGroup') {
+            return;
+        }
+
+        const saved = saveIncomingMessage(msg);
+        if (saved) {
+            if (msg.type === 'newGroup' && msg.groupId && (msg.from === userId || targetUsers(msg).includes(userId))) {
+                currentConversation = conversations[msg.groupId] || currentConversation;
+            }
+            renderMessages();
+            renderConversationList();
+        }
+    } catch (error) {
+        console.error('Error parsing WebSocket message:', error);
+    }
+}
+
+function scheduleReconnect() {
+    if (reconnectTimer) {
+        return;
+    }
+
+    setStatus('offline', `Reconnecting in ${Math.round(reconnectDelayMs / 1000)}s`);
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        reconnectDelayMs = Math.min(reconnectDelayMs * 2, 15000);
+        connect();
+    }, reconnectDelayMs);
 }
 
 function connect() {
-    const host = window.location.hostname;
-    console.log('Attempting to connect to WebSocket at', `ws://${host}/ws`);
-    ws = new WebSocket(`ws://${host}/ws`);
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        return;
+    }
+
+    setStatus('connecting', 'Connecting...');
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
 
     ws.onopen = () => {
-        console.log('WebSocket connection opened.');
-        showSystemMessage('Connected to the server.');
+        hasJoined = true;
+        reconnectDelayMs = 1000;
+        setStatus('online', 'Connected');
+        sendControl('join', { since_id: lastSeenId });
+        sendControl('getOnlineUser');
+        flushOutbox();
     };
 
-    ws.onmessage = (event) => {
-        console.log('Received raw message:', event.data);
-        try {
-            const msg = JSON.parse(event.data);
+    ws.onmessage = handleIncoming;
 
-            if (msg.type === 'ping') {
-                ws.send('{"type":"pong"}');
-                return;
-            }
-
-            console.log('Parsed message:', msg);
-            
-            // 检查消息 ID，如果已经显示过则跳过（防重复）
-            if (msg.id && displayedMessageIds.has(msg.id)) {
-                console.log('Message ID already exists, skipping:', msg.id);
-                return;
-            }
-            
-            if (msg.to && msg.to.users && !msg.to.all) {
-                if (msg.to.users.includes(userId) || msg.from === userId) {
-                    showMessage(msg);
-                }
-            } else {
-                showMessage(msg);
-            }
-        } catch (e) {
-            console.error('Error parsing message JSON:', e);
+    ws.onclose = () => {
+        ws = null;
+        if (hasJoined) {
+            scheduleReconnect();
+        } else {
+            setStatus('offline', 'Disconnected');
         }
     };
 
-    ws.onclose = (event) => {
-        console.log('WebSocket connection closed. Code:', event.code, 'Reason:', event.reason, 'wasClean:', event.wasClean);
-        showSystemMessage('Disconnected. Trying to reconnect in 3 seconds...');
-        setTimeout(connect, 3000);
+    ws.onerror = () => {
+        setStatus('offline', 'Connection error');
+    };
+}
+
+function messageTargetForCurrentConversation() {
+    if (currentConversation.type === 'global') {
+        return { all: true, users: [] };
+    }
+    if (currentConversation.type === 'group') {
+        const members = Array.from(new Set([userId, ...(currentConversation.members || [])]));
+        return { all: false, users: members };
+    }
+    return { all: false, users: [currentConversation.id] };
+}
+
+function buildOutgoingMessage(text) {
+    const message = {
+        type: 'text',
+        from: userId,
+        to: messageTargetForCurrentConversation(),
+        name: getNickname(),
+        data: text,
+        timestamp: Math.floor(Date.now() / 1000)
     };
 
-    ws.onerror = (error) => {
-        console.error('WebSocket Error:', error);
-    };
+    if (currentConversation.type === 'group') {
+        message.groupId = currentConversation.id;
+        message.groupName = currentConversation.name;
+    }
+
+    return message;
 }
 
 function sendMessage(event) {
     event.preventDefault();
-    if (input.value && ws && ws.readyState === WebSocket.OPEN) {
-        const msg = {
-            type: 'text',
-            from: userId,
-            to: { all: true, users: [] },
-            name: localStorage.getItem('esp-chat-nickname'),
-            data: input.value,
-            id: 0, // Server will assign
-            timestamp: Math.floor(Date.now() / 1000)
-        };
-        const jsonMsg = JSON.stringify(msg);
-        console.log('Sending message:', jsonMsg);
-        setTimeout(() => {
-            ws.send(jsonMsg);
-        }, 0);
-        input.value = '';
-    } else {
-        console.log('Could not send message. WebSocket not open. ReadyState:', ws ? ws.readyState : 'ws is null');
+    const text = input.value.trim();
+    if (!text) {
+        return;
     }
+
+    const message = buildOutgoingMessage(text.slice(0, 256));
+    input.value = '';
+
+    if (!sendRaw(message)) {
+        queueMessage(message);
+    }
+}
+
+function openGroupModal() {
+    userSelectList.innerHTML = '';
+    const candidates = Array.from(onlineUsers.values()).filter((user) => user.id !== userId);
+
+    if (candidates.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'conversation-empty';
+        empty.textContent = 'No online users available.';
+        userSelectList.appendChild(empty);
+    } else {
+        candidates.forEach((user) => {
+            const label = document.createElement('label');
+            label.className = 'user-select-item';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = user.id;
+
+            const name = document.createElement('span');
+            name.textContent = user.name;
+
+            label.appendChild(checkbox);
+            label.appendChild(name);
+            userSelectList.appendChild(label);
+        });
+    }
+
+    createGroupModal.classList.add('visible');
+}
+
+function closeGroupModal() {
+    createGroupModal.classList.remove('visible');
+}
+
+function createGroup() {
+    const selectedIds = Array.from(userSelectList.querySelectorAll('input[type="checkbox"]:checked')).map((input) => input.value);
+    if (selectedIds.length === 0) {
+        alert('Select at least one online user.');
+        return;
+    }
+
+    const members = Array.from(new Set([userId, ...selectedIds]));
+    const memberNames = members.map((id) => onlineUsers.get(id)?.name || (id === userId ? getNickname() : id.slice(0, 8)));
+    const groupId = `group-${generateUUID()}`;
+    const groupName = memberNames.join(', ');
+
+    const message = {
+        type: 'newGroup',
+        from: userId,
+        name: getNickname(),
+        groupId,
+        groupName,
+        to: { all: false, users: members },
+        data: `${getNickname()} created ${groupName}`,
+        timestamp: Math.floor(Date.now() / 1000)
+    };
+
+    conversations[groupId] = {
+        id: groupId,
+        name: groupName,
+        type: 'group',
+        members,
+        lastPreview: message.data,
+        updatedAt: message.timestamp
+    };
+    currentConversation = conversations[groupId];
+    saveConversations();
+    closeGroupModal();
+    renderMessages();
+    renderConversationList();
+
+    if (!sendRaw(message)) {
+        queueMessage(message);
+    }
+}
+
+function setSettingsStatus(text, isError = false) {
+    settingsStatus.textContent = text;
+    settingsStatus.dataset.state = isError ? 'error' : 'ok';
+}
+
+async function openSettings() {
+    settingsStatus.textContent = '';
+    settingsAdminPassword.value = '';
+    settingsWifiPassword.value = '';
+    settingsNewAdminPassword.value = '';
+    settingsOpenNetwork.checked = false;
+    settingsWifiPassword.disabled = false;
+    settingsModal.classList.add('visible');
+    setSettingsStatus('Loading current settings...');
+
+    try {
+        const response = await fetch('/api/settings', { cache: 'no-store' });
+        const data = await response.json();
+        if (!data.ok) {
+            throw new Error(data.message || 'Unable to load settings');
+        }
+        settingsSsid.value = data.ssid || '';
+        settingsChannel.value = data.channel || 1;
+        settingsWifiPassword.placeholder = data.passwordSet
+            ? 'Leave blank to keep current password'
+            : 'No password is currently set';
+        setSettingsStatus('Enter the admin password to save changes.');
+    } catch (error) {
+        setSettingsStatus(`Failed to load settings: ${error.message}`, true);
+    }
+}
+
+function closeSettings() {
+    settingsModal.classList.remove('visible');
+}
+
+async function saveSettings(reboot) {
+    const adminPassword = settingsAdminPassword.value.trim();
+    const ssid = settingsSsid.value.trim();
+    const channel = Number(settingsChannel.value);
+    const password = settingsWifiPassword.value;
+    const newAdminPassword = settingsNewAdminPassword.value;
+
+    if (!adminPassword) {
+        setSettingsStatus('Admin password is required.', true);
+        return;
+    }
+    if (!ssid) {
+        setSettingsStatus('SSID cannot be empty.', true);
+        return;
+    }
+    if (!Number.isInteger(channel) || channel < 1 || channel > 13) {
+        setSettingsStatus('Channel must be between 1 and 13.', true);
+        return;
+    }
+    if (!settingsOpenNetwork.checked && password && (password.length < 8 || password.length > 63)) {
+        setSettingsStatus('Wi-Fi password must be 8 to 63 characters, or left blank to keep the current password.', true);
+        return;
+    }
+    if (newAdminPassword && (newAdminPassword.length < 4 || newAdminPassword.length > 32)) {
+        setSettingsStatus('New admin password must be 4 to 32 characters.', true);
+        return;
+    }
+
+    setSettingsStatus(reboot ? 'Saving settings and restarting...' : 'Saving settings...');
+
+    try {
+        const response = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                adminPassword,
+                ssid,
+                password,
+                openNetwork: settingsOpenNetwork.checked,
+                channel,
+                newAdminPassword,
+                reboot
+            })
+        });
+        const data = await response.json();
+        if (!data.ok) {
+            throw new Error(data.message || 'Save failed');
+        }
+        setSettingsStatus(data.message || 'Settings saved.');
+        if (data.restarting) {
+            hasJoined = false;
+            if (ws) {
+                ws.close();
+            }
+            setStatus('offline', 'ESP32 restarting');
+        }
+    } catch (error) {
+        setSettingsStatus(`Save failed: ${error.message}`, true);
+    }
+}
+
+function enterChat() {
+    const nickname = nicknameInput.value.trim().slice(0, 31);
+    if (!nickname) {
+        alert('Please enter a nickname.');
+        return;
+    }
+
+    hasJoined = true;
+    localStorage.setItem(STORAGE.nickname, nickname);
+    chatNickname.textContent = nickname;
+    onlineUsers.set(userId, { id: userId, name: nickname });
+
+    loginContainer.style.opacity = '0';
+    setTimeout(() => {
+        loginContainer.style.display = 'none';
+        chatContainer.classList.add('visible');
+        renderMessages();
+        renderConversationList();
+        connect();
+    }, 250);
 }
 
 function setTheme(isDark) {
-    if (isDark) {
-        document.body.classList.add('dark-mode');
-        themeSwitch.checked = true;
-        localStorage.setItem('theme', 'dark');
-    } else {
-        document.body.classList.remove('dark-mode');
-        themeSwitch.checked = false;
-        localStorage.setItem('theme', 'light');
-    }
+    document.body.classList.toggle('dark-mode', isDark);
+    themeSwitch.checked = isDark;
+    localStorage.setItem(STORAGE.theme, isDark ? 'dark' : 'light');
 }
 
-themeSwitch.addEventListener('change', (e) => {
-    setTheme(e.target.checked);
+joinBtn.addEventListener('click', enterChat);
+nicknameInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+        enterChat();
+    }
 });
 
-// Apply saved theme on load
-const savedTheme = localStorage.getItem('theme');
-// Default to dark mode if no theme is saved
+menuBtn.addEventListener('click', () => {
+    renderConversationList();
+    chatContainer.classList.remove('visible');
+    conversationListContainer.classList.add('visible');
+});
+
+backBtn.addEventListener('click', () => {
+    conversationListContainer.classList.remove('visible');
+    chatContainer.classList.add('visible');
+    renderMessages();
+});
+
+createGroupBtn.addEventListener('click', openGroupModal);
+createGroupCancel.addEventListener('click', closeGroupModal);
+createGroupConfirm.addEventListener('click', createGroup);
+createGroupModal.addEventListener('click', (event) => {
+    if (event.target === createGroupModal) {
+        closeGroupModal();
+    }
+});
+settingsBtn.addEventListener('click', openSettings);
+settingsCancel.addEventListener('click', closeSettings);
+settingsSave.addEventListener('click', () => saveSettings(false));
+settingsSaveReboot.addEventListener('click', () => saveSettings(true));
+settingsOpenNetwork.addEventListener('change', () => {
+    settingsWifiPassword.disabled = settingsOpenNetwork.checked;
+    if (settingsOpenNetwork.checked) {
+        settingsWifiPassword.value = '';
+    }
+});
+settingsModal.addEventListener('click', (event) => {
+    if (event.target === settingsModal) {
+        closeSettings();
+    }
+});
+
+themeSwitch.addEventListener('change', (event) => {
+    setTheme(event.target.checked);
+});
+
+const savedTheme = localStorage.getItem(STORAGE.theme);
 setTheme(savedTheme === 'light' ? false : true);
+chatNickname.textContent = getNickname();
+renderMessages();
+renderConversationList();
