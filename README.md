@@ -1,8 +1,12 @@
 # ESP32-Web-Chat
 
-English: ESP32-Web-Chat is a standalone local chat room built on ESP32. The device creates its own Wi-Fi hotspot, and anyone connected to that network can open the web page and join the conversation.
+ESP32-Web-Chat turns a single ESP32 board into a pocket-sized, offline chat hub. Power it on, connect to the `ESPChat` hotspot, and every phone or laptop nearby can open a browser and start talking in real time, with no router, cloud account, or internet connection required.
 
-中文：ESP32-Web-Chat 是一个基于 ESP32 的离线聊天室。设备会创建自己的 Wi-Fi 热点，连接到该网络的用户可以直接通过网页加入聊天。
+It is built for maker demos, classrooms, field teams, events, and any place where a lightweight local message board is more useful than another app install. The ESP32 hosts the Wi-Fi network, serves the responsive web UI, redirects captive-portal requests, and keeps the conversation flowing over WebSockets.
+
+ESP32-Web-Chat 可以把一块 ESP32 变成一个随身携带的离线聊天室。只要给开发板供电，它就会创建 `ESPChat` Wi-Fi 热点；手机或电脑连上后，打开浏览器即可实时聊天，不依赖路由器、云服务或互联网。
+
+它适合 Maker 展示、课堂互动、户外协作、活动现场留言板，以及任何需要“本地、轻量、马上可用”沟通空间的场景。ESP32 同时负责 Wi-Fi 热点、网页服务、Captive Portal 自动跳转和 WebSocket 实时消息转发，让一块小板子也能变成完整的局域网聊天室。
 
 For the Chinese version, see [README-CN.md](README-CN.md).
 
@@ -32,8 +36,9 @@ For the Chinese version, see [README-CN.md](README-CN.md).
 
 ### Default Parameters
 
-- Wi-Fi SSID: `ESPChat` (defined in `main/main.c`)
-- Wi-Fi password: `esp-chat` (defined in `main/main.c`)
+- Wi-Fi SSID: `ESPChat` (stored in NVS from the browser Settings panel)
+- Wi-Fi password: `esp-chat` (stored in NVS from the browser Settings panel)
+- Default settings admin password: `admin` (change it after first boot)
 - Default IP address: `192.168.4.1`
 - Maximum WebSocket clients: 10
 - Maximum AP station connections: 8
@@ -49,20 +54,15 @@ For the Chinese version, see [README-CN.md](README-CN.md).
    cd esp32-chat
    ```
 
-2. Configure Wi-Fi
-
-   Open `main/main.c` and adjust the SSID and password if needed:
-
-   ```c
-   #define EXAMPLE_ESP_WIFI_SSID      "ESPChat"
-   #define EXAMPLE_ESP_WIFI_PASS      "esp-chat"
-   ```
-
-3. Flash the firmware
+2. Flash the firmware
 
    - Connect the ESP32 to your computer
    - Select the correct board and serial port
    - Build and upload the firmware
+
+3. Configure Wi-Fi on first boot
+
+   Connect to the default `ESPChat` hotspot. Open `Settings` from the chat UI, enter the admin password, and change the Wi-Fi SSID, password, channel, and settings password. Settings are stored in ESP32 NVS and apply after saving and rebooting.
 
 4. Open the chat room
 
@@ -126,12 +126,8 @@ ESP32-Web-Chat/
 
 **Q: I cannot connect to the Wi-Fi network**
 
-- Verify the SSID and password in `main/main.c`:
-
-  ```c
-  #define EXAMPLE_ESP_WIFI_SSID      "ESPChat"
-  #define EXAMPLE_ESP_WIFI_PASS      "esp-chat"
-  ```
+- Verify the SSID and password saved in the browser `Settings` panel
+- If you forget the new credentials, erase NVS or reflash the firmware to restore defaults
 
 - Make sure the signal is strong enough
 - Restart the ESP32
@@ -160,10 +156,17 @@ Contributions are welcome. A typical workflow looks like this:
 
 ## TODO
 
-- Make Wi-Fi SSID and password configurable without editing source code
-- Add persistent storage for message history
-- Improve reconnect behavior and user-facing diagnostics
-- Add fuller ESP-IDF build and flashing documentation
+- [x] Add NVS-backed browser settings for Wi-Fi SSID, password, and channel so deployments do not require source edits
+- [x] Build a small admin-password-protected setup panel for changing hotspot credentials and the settings password from the browser
+- [ ] Assign message IDs and timestamps on the ESP32, validate incoming JSON fields, clamp payload sizes, and return clear errors for malformed WebSocket frames
+- [ ] Implement `since_id` history sync so reconnecting clients only replay missed messages instead of receiving the whole ring buffer
+- [ ] Add optional persistent history in NVS, SPIFFS, or SD card storage with retention controls and a clear-room action
+- [ ] Complete online user presence with nickname registration, join and leave notices, user list updates, and heartbeat-driven cleanup visible in the UI
+- [ ] Finish private chat and group chat flows, or hide unfinished conversation-list UI until the backend protocol fully supports it
+- [ ] Improve reconnect UX with exponential backoff, connection-state badges, an offline send queue, and duplicate-message prevention across reloads
+- [ ] Harden captive portal support for iOS, Android, and Windows detection URLs, safer DNS response bounds checking, and clearer fallback instructions
+- [ ] Optimize front-end asset size and caching headers to reduce RAM and flash pressure and speed up first load on constrained boards
+- [ ] Add security and privacy guidance covering local-only scope, WPA2 password choices, setup-page protection, and the fact that no cloud storage is used
 
 ## License
 
