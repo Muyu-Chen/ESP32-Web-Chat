@@ -1,3 +1,74 @@
+menu "ESP32 Web Chat"
+
+    config CHAT_WIFI_SSID
+        string "Factory default SoftAP SSID"
+        default "ESPChat"
+        help
+            Initial Wi-Fi network name created by the ESP32. Runtime changes are stored in NVS from the browser settings page.
+
+    config CHAT_WIFI_PASSWORD
+        string "Factory default SoftAP password"
+        default "esp-chat"
+        help
+            Initial WPA2 password for the ESP32 access point. Runtime changes are stored in NVS from the browser settings page.
+
+    config CHAT_ADMIN_PASSWORD
+        string "Factory default settings admin password"
+        default "admin"
+        help
+            Initial password required by the browser settings page. Change it from the settings page after first boot.
+
+    config CHAT_WIFI_CHANNEL
+        int "Factory default SoftAP channel"
+        range 1 13
+        default 1
+        help
+            Initial Wi-Fi channel used by the access point. Runtime changes are stored in NVS from the browser settings page.
+
+    config CHAT_MAX_STA_CONN
+        int "Maximum Wi-Fi stations"
+        range 1 10
+        default 8
+        help
+            Maximum number of devices that may join the SoftAP.
+
+    config CHAT_MAX_WS_CLIENTS
+        int "Maximum WebSocket clients"
+        range 1 16
+        default 10
+        help
+            Maximum number of browser chat clients tracked by the server.
+
+    config CHAT_MESSAGE_HISTORY_SIZE
+        int "Message history size"
+        range 1 300
+        default 100
+        help
+            Number of recent messages kept in the in-memory ring buffer.
+
+    config CHAT_HEARTBEAT_INTERVAL_S
+        int "Heartbeat interval in seconds"
+        range 5 300
+        default 30
+        help
+            Interval used to ping connected WebSocket clients.
+
+    config CHAT_MAX_MESSAGE_TEXT_LEN
+        int "Maximum text message length"
+        range 32 1024
+        default 256
+        help
+            Maximum length, in bytes, for text chat messages.
+
+    config CHAT_MAX_WS_PAYLOAD_BYTES
+        int "Maximum WebSocket payload size"
+        range 128 4096
+        default 1024
+        help
+            Maximum JSON payload size accepted from a browser client.
+
+endmenu
+
 menu "HTTP file_serving example menu"
 
     config EXAMPLE_MOUNT_SD_CARD
