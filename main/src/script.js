@@ -34,6 +34,8 @@ const settingsSaveReboot = document.getElementById('settings-save-reboot');
 const settingsCancel = document.getElementById('settings-cancel');
 const conversationList = document.getElementById('conversation-list');
 const userSelectList = document.getElementById('user-select-list');
+const recoverHistoryBtn = document.getElementById('recover-history-btn');
+const historyRecoveryStatus = document.getElementById('history-recovery-status');
 
 const STORAGE = {
     userId: 'esp-chat-uuid',
@@ -45,8 +47,10 @@ const STORAGE = {
     theme: 'theme'
 };
 
-const MAX_LOCAL_MESSAGES = 300;
+const MAX_LOCAL_MESSAGES = 2000;
 const MAX_OUTBOX_MESSAGES = 30;
+const MAX_SAFE_MESSAGE_ID = Number.MAX_SAFE_INTEGER;
+const HISTORY_RECOVERY_WINDOW_MS = 4000;
 
 let ws = null;
 let hasJoined = false;
@@ -57,6 +61,8 @@ let conversations = {};
 let onlineUsers = new Map();
 let outbox = [];
 let lastSeenId = 0;
+let historyInfo = null;
+let activeRecovery = null;
 
 function generateUUID() {
     let d = new Date().getTime();
@@ -113,13 +119,15 @@ function defaultConversation() {
 }
 
 function loadState() {
-    allMessages = readJSON(STORAGE.messages, []).filter((msg) => msg && Number.isFinite(Number(msg.id)));
+    allMessages = readJSON(STORAGE.messages, []).filter((msg) => msg && isSafeMessageId(msg.id));
     conversations = readJSON(STORAGE.conversations, {});
     conversations.global = { ...defaultConversation(), ...(conversations.global || {}) };
     outbox = readJSON(STORAGE.outbox, []);
     lastSeenId = Number(localStorage.getItem(STORAGE.lastSeenId) || 0);
 
-    const localMaxId = allMessages.reduce((maxId, msg) => Math.max(maxId, Number(msg.id) || 0), 0);
+    const localMaxId = allMessages
+        .filter((msg) => !msg.recovered)
+        .reduce((maxId, msg) => Math.max(maxId, Number(msg.id) || 0), 0);
     lastSeenId = Math.max(lastSeenId, localMaxId);
     localStorage.setItem(STORAGE.lastSeenId, String(lastSeenId));
 }
@@ -129,9 +137,18 @@ loadState();
 currentConversation = conversations.global;
 
 function saveMessages() {
-    allMessages = allMessages
-        .sort((a, b) => Number(a.id) - Number(b.id))
-        .slice(-MAX_LOCAL_MESSAGES);
+    const sorted = allMessages.sort((a, b) => Number(a.id) - Number(b.id));
+    if (sorted.length > MAX_LOCAL_MESSAGES) {
+        const recovered = sorted.filter((msg) => msg.recovered).slice(-MAX_LOCAL_MESSAGES);
+        const regular = sorted.filter((msg) => !msg.recovered);
+        const regularSlots = MAX_LOCAL_MESSAGES - recovered.length;
+        allMessages = [
+            ...(regularSlots > 0 ? regular.slice(-regularSlots) : []),
+            ...recovered
+        ].sort((a, b) => Number(a.id) - Number(b.id));
+    } else {
+        allMessages = sorted;
+    }
     writeJSON(STORAGE.messages, allMessages);
 }
 
@@ -146,7 +163,7 @@ function saveOutbox() {
 
 function rememberSeenId(id) {
     const numericId = Number(id);
-    if (Number.isFinite(numericId) && numericId > lastSeenId) {
+    if (Number.isSafeInteger(numericId) && numericId > lastSeenId) {
         lastSeenId = numericId;
         localStorage.setItem(STORAGE.lastSeenId, String(lastSeenId));
     }
@@ -175,6 +192,78 @@ function isMessageForMe(msg) {
     return targetUsers(msg).includes(userId);
 }
 
+function isMessageVisibleToUser(msg, targetUserId) {
+    if (!msg || !targetUserId) {
+        return false;
+    }
+    if (msg.from === targetUserId || (msg.to && msg.to.all)) {
+        return true;
+    }
+    return targetUsers(msg).includes(targetUserId);
+}
+
+function isSafeMessageId(id) {
+    const numericId = Number(id);
+    return Number.isSafeInteger(numericId) && numericId > 0 && numericId <= MAX_SAFE_MESSAGE_ID;
+}
+
+function validUserId(value) {
+    return typeof value === 'string' && value.length > 0 && value.length <= 63;
+}
+
+function validMessageTarget(to) {
+    return to &&
+        typeof to === 'object' &&
+        typeof to.all === 'boolean' &&
+        Array.isArray(to.users) &&
+        to.users.length <= 17 &&
+        to.users.every(validUserId) &&
+        (to.all || to.users.length > 0);
+}
+
+function validHistoryMessage(msg) {
+    if (!msg || typeof msg !== 'object' || !isSafeMessageId(msg.id)) {
+        return false;
+    }
+    if (msg.type !== 'text' && msg.type !== 'newGroup') {
+        return false;
+    }
+    if (!validUserId(msg.from) || typeof msg.name !== 'string' || msg.name.length === 0 || msg.name.length > 31) {
+        return false;
+    }
+    if (!validMessageTarget(msg.to) || !Number.isFinite(Number(msg.timestamp))) {
+        return false;
+    }
+    if (typeof msg.data !== 'string' || msg.data.length > 256) {
+        return false;
+    }
+    if (msg.type === 'text' && msg.data.length === 0) {
+        return false;
+    }
+    if (msg.type === 'newGroup') {
+        return typeof msg.groupId === 'string' && msg.groupId.length > 0 && msg.groupId.length <= 63 &&
+            typeof msg.groupName === 'string' && msg.groupName.length > 0 && msg.groupName.length <= 63;
+    }
+    return true;
+}
+
+function comparableMessage(msg) {
+    return JSON.stringify({
+        id: Number(msg.id),
+        type: msg.type,
+        from: msg.from,
+        name: msg.name,
+        to: {
+            all: Boolean(msg.to && msg.to.all),
+            users: targetUsers(msg).slice().sort()
+        },
+        data: msg.data || '',
+        timestamp: Number(msg.timestamp) || 0,
+        groupId: msg.groupId || '',
+        groupName: msg.groupName || ''
+    });
+}
+
 function conversationForMessage(msg) {
     if (msg.type === 'newGroup' || msg.groupId) {
         return msg.groupId;
@@ -196,13 +285,15 @@ function updateConversationFromMessage(msg) {
     const conversationId = conversationForMessage(msg);
     const preview = msg.type === 'newGroup' ? msg.data : msg.data;
     const updatedAt = Number(msg.timestamp) || Date.now() / 1000;
+    const existingConversation = conversations[conversationId];
+    const keepExistingPreview = existingConversation && (existingConversation.updatedAt || 0) > updatedAt;
 
     if (conversationId === 'global') {
         conversations.global = {
             ...defaultConversation(),
             ...(conversations.global || {}),
-            lastPreview: preview || 'Group Chat',
-            updatedAt
+            lastPreview: keepExistingPreview ? conversations.global.lastPreview : (preview || 'Group Chat'),
+            updatedAt: keepExistingPreview ? conversations.global.updatedAt : updatedAt
         };
         return;
     }
@@ -214,8 +305,8 @@ function updateConversationFromMessage(msg) {
             name: msg.groupName || conversations[conversationId]?.name || 'Group Chat',
             type: 'group',
             members,
-            lastPreview: preview || 'New group',
-            updatedAt
+            lastPreview: keepExistingPreview ? existingConversation.lastPreview : (preview || 'New group'),
+            updatedAt: keepExistingPreview ? existingConversation.updatedAt : updatedAt
         };
         return;
     }
@@ -230,8 +321,8 @@ function updateConversationFromMessage(msg) {
         name: otherName,
         type: 'private',
         members: [userId, otherId],
-        lastPreview: preview || 'Private chat',
-        updatedAt
+        lastPreview: keepExistingPreview ? existingConversation.lastPreview : (preview || 'Private chat'),
+        updatedAt: keepExistingPreview ? existingConversation.updatedAt : updatedAt
     };
 }
 
@@ -242,7 +333,7 @@ function saveIncomingMessage(msg) {
     }
 
     const id = Number(msg.id);
-    if (!Number.isFinite(id) || allMessages.some((stored) => Number(stored.id) === id)) {
+    if (!isSafeMessageId(id) || allMessages.some((stored) => Number(stored.id) === id)) {
         return false;
     }
 
@@ -286,7 +377,12 @@ function createSystemElement(text) {
 
 function createMessageElement(msg) {
     if (msg.type === 'newGroup') {
-        return createSystemElement(msg.data || `${msg.name || 'Someone'} created ${msg.groupName || 'a group'}`);
+        const text = msg.data || `${msg.name || 'Someone'} created ${msg.groupName || 'a group'}`;
+        const system = createSystemElement(msg.recovered ? `${text} · Recovered from ${msg.recoveredFromName || 'another device'}` : text);
+        if (msg.recovered) {
+            system.classList.add('system-recovered');
+        }
+        return system;
     }
 
     const isMine = msg.from === userId;
@@ -295,6 +391,9 @@ function createMessageElement(msg) {
 
     const bubble = document.createElement('div');
     bubble.className = `message-bubble${isMine ? ' message-bubble-mine' : ''}`;
+    if (msg.recovered) {
+        bubble.classList.add('message-bubble-recovered');
+    }
 
     const from = document.createElement('div');
     from.className = 'from';
@@ -310,6 +409,12 @@ function createMessageElement(msg) {
 
     bubble.appendChild(from);
     bubble.appendChild(data);
+    if (msg.recovered) {
+        const recovered = document.createElement('span');
+        recovered.className = 'recovered-label';
+        recovered.textContent = `Recovered from ${msg.recoveredFromName || 'another device'}`;
+        bubble.appendChild(recovered);
+    }
     bubble.appendChild(timestamp);
     item.appendChild(bubble);
     return item;
@@ -445,6 +550,7 @@ function updateOnlineUsers(data) {
     }
 
     renderConversationList();
+    updateRecoveryControls();
 }
 
 function sendRaw(payload) {
@@ -486,6 +592,243 @@ function flushOutbox() {
     showSystemMessage(`Sent ${pending.length} queued message${pending.length > 1 ? 's' : ''}.`);
 }
 
+function recoverySourceName(source) {
+    return source?.name || onlineUsers.get(source?.from)?.name || (source?.from ? source.from.slice(0, 8) : 'another device');
+}
+
+function setRecoveryStatus(text) {
+    if (historyRecoveryStatus) {
+        historyRecoveryStatus.textContent = text || '';
+    }
+}
+
+function otherOnlineUserCount() {
+    return Array.from(onlineUsers.keys()).filter((id) => id !== userId).length;
+}
+
+function updateRecoveryControls() {
+    if (!recoverHistoryBtn) {
+        return;
+    }
+
+    const restoreBeforeId = Number(historyInfo?.restore_before_id || 0);
+    const canRecover = ws &&
+        ws.readyState === WebSocket.OPEN &&
+        Number.isSafeInteger(restoreBeforeId) &&
+        restoreBeforeId > 1 &&
+        otherOnlineUserCount() > 0 &&
+        !activeRecovery;
+
+    recoverHistoryBtn.disabled = !canRecover;
+
+    if (activeRecovery) {
+        setRecoveryStatus(`Recovering before #${activeRecovery.restoreBeforeId}...`);
+    } else if (!ws || ws.readyState !== WebSocket.OPEN) {
+        setRecoveryStatus('Connect to recover old messages.');
+    } else if (!historyInfo) {
+        setRecoveryStatus('Waiting for history boundary.');
+    } else if (restoreBeforeId <= 1) {
+        setRecoveryStatus('No older server boundary.');
+    } else if (otherOnlineUserCount() === 0) {
+        setRecoveryStatus('No other online devices.');
+    } else {
+        setRecoveryStatus(`Can recover before #${restoreBeforeId}.`);
+    }
+}
+
+function historyMessagePayload(msg) {
+    const payload = {
+        type: msg.type,
+        from: msg.from,
+        to: {
+            all: Boolean(msg.to && msg.to.all),
+            users: targetUsers(msg).filter(validUserId)
+        },
+        name: msg.name,
+        data: msg.data || '',
+        id: Number(msg.id),
+        timestamp: Number(msg.timestamp) || 0
+    };
+
+    if (msg.type === 'newGroup') {
+        payload.groupId = msg.groupId;
+        payload.groupName = msg.groupName;
+    }
+
+    return payload;
+}
+
+function recoveredMessagePayload(msg, source) {
+    const payload = historyMessagePayload(msg);
+    payload.recovered = true;
+    payload.recoveredFrom = source.from;
+    payload.recoveredFromName = recoverySourceName(source);
+    payload.recoveredAt = Math.floor(Date.now() / 1000);
+    return payload;
+}
+
+function importRecoveredMessage(candidate, source) {
+    if (!validHistoryMessage(candidate) || !isMessageForMe(candidate)) {
+        return 'ignored';
+    }
+
+    const id = Number(candidate.id);
+    const restoreBeforeId = Number(activeRecovery?.restoreBeforeId || historyInfo?.restore_before_id || 0);
+    if (!Number.isSafeInteger(restoreBeforeId) || restoreBeforeId <= 1 || id >= restoreBeforeId) {
+        return 'ignored';
+    }
+
+    const existing = allMessages.find((stored) => Number(stored.id) === id);
+    if (existing) {
+        return comparableMessage(existing) === comparableMessage(candidate) ? 'duplicate' : 'conflict';
+    }
+
+    const recovered = recoveredMessagePayload(candidate, source);
+    allMessages.push(recovered);
+    updateConversationFromMessage(recovered);
+    saveMessages();
+    saveConversations();
+    return 'imported';
+}
+
+function finishHistoryRecovery() {
+    if (!activeRecovery) {
+        return;
+    }
+
+    const recovery = activeRecovery;
+    activeRecovery = null;
+    if (recovery.changed) {
+        renderMessages();
+        renderConversationList();
+    }
+
+    const parts = [`Recovered ${recovery.imported} old message${recovery.imported === 1 ? '' : 's'}`];
+    if (recovery.conflicts > 0) {
+        parts.push(`${recovery.conflicts} conflict${recovery.conflicts === 1 ? '' : 's'} skipped`);
+    }
+    if (recovery.duplicates > 0) {
+        parts.push(`${recovery.duplicates} duplicate${recovery.duplicates === 1 ? '' : 's'} ignored`);
+    }
+    showSystemMessage(`${parts.join(', ')}.`);
+    updateRecoveryControls();
+    setRecoveryStatus(`${parts.join(', ')}.`);
+}
+
+function startHistoryRecovery() {
+    if (activeRecovery) {
+        return;
+    }
+
+    const restoreBeforeId = Number(historyInfo?.restore_before_id || 0);
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        setRecoveryStatus('Connect to the ESP32 first.');
+        return;
+    }
+    if (!Number.isSafeInteger(restoreBeforeId) || restoreBeforeId <= 1) {
+        setRecoveryStatus('No older server boundary to recover.');
+        return;
+    }
+    if (otherOnlineUserCount() === 0) {
+        setRecoveryStatus('No other online devices to ask.');
+        return;
+    }
+
+    const requestId = `hist-${generateUUID()}`;
+    const recovery = {
+        requestId,
+        restoreBeforeId,
+        imported: 0,
+        duplicates: 0,
+        conflicts: 0,
+        ignored: 0,
+        changed: false,
+        timer: null
+    };
+
+    if (!sendControl('historyRequest', { requestId, restore_before_id: restoreBeforeId })) {
+        setRecoveryStatus('Unable to send recovery request.');
+        return;
+    }
+
+    activeRecovery = recovery;
+    recovery.timer = setTimeout(finishHistoryRecovery, HISTORY_RECOVERY_WINDOW_MS);
+    updateRecoveryControls();
+}
+
+function handleHistoryInfo(msg) {
+    const restoreBeforeId = Number(msg.restore_before_id);
+    if (!Number.isSafeInteger(restoreBeforeId) || restoreBeforeId < 0) {
+        return;
+    }
+
+    historyInfo = {
+        boot_start_id: Number(msg.boot_start_id) || 0,
+        current_id: Number(msg.current_id) || 0,
+        earliest_id: Number(msg.earliest_id) || 0,
+        latest_id: Number(msg.latest_id) || 0,
+        restore_before_id: restoreBeforeId,
+        count: Number(msg.count) || 0,
+        capacity: Number(msg.capacity) || 0,
+        has_more_before: Boolean(msg.has_more_before)
+    };
+    updateRecoveryControls();
+}
+
+function handleHistoryRequest(msg) {
+    if (msg.from === userId ||
+        !validUserId(msg.from) ||
+        typeof msg.requestId !== 'string' ||
+        msg.requestId.length === 0 ||
+        msg.requestId.length > 63) {
+        return;
+    }
+
+    const restoreBeforeId = Number(msg.restore_before_id);
+    if (!Number.isSafeInteger(restoreBeforeId) || restoreBeforeId <= 1) {
+        return;
+    }
+
+    allMessages
+        .filter((stored) => !stored.recovered)
+        .filter((stored) => validHistoryMessage(stored))
+        .filter((stored) => Number(stored.id) < restoreBeforeId)
+        .filter((stored) => isMessageVisibleToUser(stored, msg.from))
+        .sort((a, b) => Number(a.id) - Number(b.id))
+        .forEach((stored) => {
+            sendControl('historyResponse', {
+                requestId: msg.requestId.slice(0, 63),
+                to: { all: false, users: [msg.from] },
+                message: historyMessagePayload(stored)
+            });
+        });
+}
+
+function handleHistoryResponse(msg) {
+    if (!activeRecovery ||
+        msg.requestId !== activeRecovery.requestId ||
+        msg.from === userId ||
+        !validUserId(msg.from) ||
+        typeof msg.name !== 'string') {
+        return;
+    }
+    if (!targetUsers(msg).includes(userId)) {
+        return;
+    }
+
+    const result = importRecoveredMessage(msg.message, msg);
+    if (result === 'imported') {
+        activeRecovery.imported++;
+        activeRecovery.changed = true;
+    } else if (result === 'conflict') {
+        activeRecovery.conflicts++;
+    } else if (result === 'duplicate') {
+        activeRecovery.duplicates++;
+    } else {
+        activeRecovery.ignored++;
+    }
+}
+
 function handleIncoming(event) {
     try {
         const msg = JSON.parse(event.data);
@@ -495,8 +838,23 @@ function handleIncoming(event) {
             return;
         }
 
-        if (Number.isFinite(Number(msg.id))) {
+        if (Number.isSafeInteger(Number(msg.id))) {
             rememberSeenId(msg.id);
+        }
+
+        if (msg.type === 'historyInfo') {
+            handleHistoryInfo(msg);
+            return;
+        }
+
+        if (msg.type === 'historyRequest') {
+            handleHistoryRequest(msg);
+            return;
+        }
+
+        if (msg.type === 'historyResponse') {
+            handleHistoryResponse(msg);
+            return;
         }
 
         if (msg.type === 'onlineUsers') {
@@ -552,6 +910,7 @@ function connect() {
         hasJoined = true;
         reconnectDelayMs = 1000;
         setStatus('online', 'Connected');
+        updateRecoveryControls();
         sendControl('join', { since_id: lastSeenId });
         sendControl('getOnlineUser');
         flushOutbox();
@@ -561,6 +920,12 @@ function connect() {
 
     ws.onclose = () => {
         ws = null;
+        if (activeRecovery) {
+            clearTimeout(activeRecovery.timer);
+            activeRecovery = null;
+            setRecoveryStatus('Recovery interrupted.');
+        }
+        updateRecoveryControls();
         if (hasJoined) {
             scheduleReconnect();
         } else {
@@ -840,6 +1205,7 @@ backBtn.addEventListener('click', () => {
 createGroupBtn.addEventListener('click', openGroupModal);
 createGroupCancel.addEventListener('click', closeGroupModal);
 createGroupConfirm.addEventListener('click', createGroup);
+recoverHistoryBtn.addEventListener('click', startHistoryRecovery);
 createGroupModal.addEventListener('click', (event) => {
     if (event.target === createGroupModal) {
         closeGroupModal();
@@ -870,3 +1236,4 @@ setTheme(savedTheme === 'light' ? false : true);
 chatNickname.textContent = getNickname();
 renderMessages();
 renderConversationList();
+updateRecoveryControls();

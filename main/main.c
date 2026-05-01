@@ -26,6 +26,7 @@
 #include "lwip/dns.h"
 #include "esp_http_server.h"
 #include "cJSON.h"
+#include "message_id_store.h"
 #include <errno.h>
 
 #define CHAT_WIFI_SSID             CONFIG_CHAT_WIFI_SSID
@@ -41,6 +42,7 @@
 
 #define MAX_USER_ID_LEN            63
 #define MAX_NAME_LEN               31
+#define MAX_REQUEST_ID_LEN         63
 #define MAX_GROUP_ID_LEN           63
 #define MAX_GROUP_NAME_LEN         63
 #define MAX_WIFI_SSID_LEN          32
@@ -68,7 +70,7 @@ typedef struct {
 
 typedef struct {
     char *payload;
-    uint32_t id;
+    uint64_t id;
 } message_t;
 
 typedef struct {
@@ -82,7 +84,8 @@ static client_slot_t client_slots[MAX_CLIENTS];
 static SemaphoreHandle_t client_mutex;
 
 static message_t message_buffer[MAX_MESSAGES];
-static uint32_t message_id_counter = 0;
+static uint64_t message_id_counter = 0;
+static uint64_t boot_start_id = 1;
 static int message_buffer_head = 0;
 static SemaphoreHandle_t message_mutex;
 
@@ -352,7 +355,7 @@ static char *read_request_body(httpd_req_t *req, size_t max_len)
     return body;
 }
 
-static uint32_t json_since_id(const cJSON *root)
+static uint64_t json_since_id(const cJSON *root)
 {
     cJSON *since_id = cJSON_GetObjectItem(root, "since_id");
     if (!cJSON_IsNumber(since_id)) {
@@ -363,7 +366,62 @@ static uint32_t json_since_id(const cJSON *root)
         return 0;
     }
 
-    return (uint32_t)since_id->valuedouble;
+    if (since_id->valuedouble > (double)CHAT_MESSAGE_MAX_SAFE_ID) {
+        return CHAT_MESSAGE_MAX_SAFE_ID;
+    }
+
+    return (uint64_t)since_id->valuedouble;
+}
+
+typedef struct {
+    uint64_t boot_start_id;
+    uint64_t current_id;
+    uint64_t earliest_id;
+    uint64_t latest_id;
+    uint64_t restore_before_id;
+    int count;
+    int capacity;
+    bool has_more_before;
+} history_bounds_t;
+
+static void fill_history_bounds_locked(history_bounds_t *bounds)
+{
+    memset(bounds, 0, sizeof(*bounds));
+    bounds->boot_start_id = boot_start_id;
+    bounds->current_id = message_id_counter;
+    bounds->capacity = MAX_MESSAGES;
+
+    for (int i = 0; i < MAX_MESSAGES; i++) {
+        if (message_buffer[i].payload == NULL) {
+            continue;
+        }
+
+        uint64_t id = message_buffer[i].id;
+        if (bounds->count == 0 || id < bounds->earliest_id) {
+            bounds->earliest_id = id;
+        }
+        if (id > bounds->latest_id) {
+            bounds->latest_id = id;
+        }
+        bounds->count++;
+    }
+
+    bounds->restore_before_id = bounds->count > 0 ? bounds->earliest_id : bounds->boot_start_id;
+    bounds->has_more_before = bounds->restore_before_id > 1;
+}
+
+static uint64_t current_restore_before_id(void)
+{
+    uint64_t restore_before_id = boot_start_id;
+
+    if (xSemaphoreTake(message_mutex, portMAX_DELAY) == pdTRUE) {
+        history_bounds_t bounds;
+        fill_history_bounds_locked(&bounds);
+        restore_before_id = bounds.restore_before_id;
+        xSemaphoreGive(message_mutex);
+    }
+
+    return restore_before_id;
 }
 
 static bool validate_to_object(cJSON *root)
@@ -403,6 +461,83 @@ static bool validate_to_object(cJSON *root)
     }
 
     return cJSON_IsTrue(all) || cJSON_GetArraySize(users) > 0;
+}
+
+static bool json_array_contains_string(cJSON *array, const char *value)
+{
+    if (!cJSON_IsArray(array) || value == NULL) {
+        return false;
+    }
+
+    cJSON *item = NULL;
+    cJSON_ArrayForEach(item, array) {
+        if (cJSON_IsString(item) && item->valuestring != NULL && strcmp(item->valuestring, value) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool message_visible_to_user(cJSON *message, const char *user_id)
+{
+    if (!cJSON_IsObject(message) || user_id == NULL || user_id[0] == '\0') {
+        return false;
+    }
+
+    cJSON *from = cJSON_GetObjectItem(message, "from");
+    if (cJSON_IsString(from) && from->valuestring != NULL && strcmp(from->valuestring, user_id) == 0) {
+        return true;
+    }
+
+    cJSON *to = cJSON_GetObjectItem(message, "to");
+    if (!cJSON_IsObject(to)) {
+        return false;
+    }
+
+    cJSON *all = cJSON_GetObjectItem(to, "all");
+    if (cJSON_IsTrue(all)) {
+        return true;
+    }
+
+    return json_array_contains_string(cJSON_GetObjectItem(to, "users"), user_id);
+}
+
+static esp_err_t relay_payload_to_targets(cJSON *to, const char *payload)
+{
+    if (!cJSON_IsObject(to) || payload == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *all = cJSON_GetObjectItem(to, "all");
+    cJSON *users = cJSON_GetObjectItem(to, "users");
+    bool send_all = cJSON_IsTrue(all);
+
+    if (!send_all && (!cJSON_IsArray(users) || cJSON_GetArraySize(users) == 0)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (xSemaphoreTake(client_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    esp_err_t first_error = ESP_OK;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (!client_slots[i].active || client_slots[i].user_id[0] == '\0') {
+            continue;
+        }
+        if (!send_all && !json_array_contains_string(users, client_slots[i].user_id)) {
+            continue;
+        }
+
+        esp_err_t ret = send_text_to_fd(client_slots[i].fd, payload);
+        if (ret != ESP_OK && first_error == ESP_OK) {
+            first_error = ret;
+        }
+    }
+
+    xSemaphoreGive(client_mutex);
+    return first_error;
 }
 
 static bool update_client_identity(int fd, const char *user_id, const char *name)
@@ -545,7 +680,73 @@ static void send_online_users_to_client(int fd)
     free(payload);
 }
 
-static void send_history_to_client(int fd, uint32_t since_id)
+static char *build_history_info_payload(void)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (root == NULL) {
+        return NULL;
+    }
+
+    cJSON_AddStringToObject(root, "type", "historyInfo");
+    cJSON_AddStringToObject(root, "from", "server");
+    cJSON_AddNumberToObject(root, "timestamp", current_timestamp_s(NULL));
+
+    cJSON *to = cJSON_AddObjectToObject(root, "to");
+    cJSON *users = to ? cJSON_AddArrayToObject(to, "users") : NULL;
+    if (to == NULL || users == NULL) {
+        cJSON_Delete(root);
+        return NULL;
+    }
+    cJSON_AddBoolToObject(to, "all", true);
+
+    if (xSemaphoreTake(message_mutex, portMAX_DELAY) != pdTRUE) {
+        cJSON_Delete(root);
+        return NULL;
+    }
+
+    history_bounds_t bounds;
+    fill_history_bounds_locked(&bounds);
+    xSemaphoreGive(message_mutex);
+
+    cJSON_AddNumberToObject(root, "boot_start_id", (double)bounds.boot_start_id);
+    cJSON_AddNumberToObject(root, "current_id", (double)bounds.current_id);
+    cJSON_AddNumberToObject(root, "earliest_id", (double)bounds.earliest_id);
+    cJSON_AddNumberToObject(root, "latest_id", (double)bounds.latest_id);
+    cJSON_AddNumberToObject(root, "restore_before_id", (double)bounds.restore_before_id);
+    cJSON_AddNumberToObject(root, "count", bounds.count);
+    cJSON_AddNumberToObject(root, "capacity", bounds.capacity);
+    cJSON_AddBoolToObject(root, "has_more_before", bounds.has_more_before);
+
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    return payload;
+}
+
+static void send_history_info_to_client(int fd)
+{
+    char *payload = build_history_info_payload();
+    if (payload == NULL) {
+        send_error_to_client(fd, "server_busy", "History boundary is temporarily unavailable");
+        return;
+    }
+
+    send_text_to_fd(fd, payload);
+    free(payload);
+}
+
+static void broadcast_history_info(void)
+{
+    char *payload = build_history_info_payload();
+    if (payload == NULL) {
+        ESP_LOGW(TAG, "Failed to build history boundary payload");
+        return;
+    }
+
+    broadcast_message(payload);
+    free(payload);
+}
+
+static void send_history_to_client(int fd, uint64_t since_id)
 {
     if (xSemaphoreTake(message_mutex, portMAX_DELAY) != pdTRUE) {
         send_error_to_client(fd, "server_busy", "Message history is temporarily unavailable");
@@ -570,39 +771,63 @@ static void send_history_to_client(int fd, uint32_t since_id)
     }
 
     xSemaphoreGive(message_mutex);
-    ESP_LOGI(TAG, "Sent %d history messages to fd=%d since_id=%" PRIu32, sent, fd, since_id);
+    ESP_LOGI(TAG, "Sent %d history messages to fd=%d since_id=%" PRIu64, sent, fd, since_id);
 }
 
-static char *finalize_and_store_message(cJSON *root)
+static esp_err_t finalize_and_store_message(cJSON *root, char **payload_out)
 {
     char *payload = NULL;
+    esp_err_t ret = ESP_OK;
+
+    if (payload_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *payload_out = NULL;
 
     if (xSemaphoreTake(message_mutex, portMAX_DELAY) != pdTRUE) {
-        return NULL;
+        return ESP_ERR_TIMEOUT;
     }
 
-    message_id_counter++;
-    uint32_t id = message_id_counter;
+    if (message_id_counter >= CHAT_MESSAGE_MAX_SAFE_ID) {
+        ret = ESP_ERR_INVALID_SIZE;
+        goto out;
+    }
+
+    uint64_t id = message_id_counter + 1;
     int64_t timestamp = current_timestamp_s(root);
 
     cJSON_DeleteItemFromObjectCaseSensitive(root, "id");
     cJSON_DeleteItemFromObjectCaseSensitive(root, "timestamp");
-    cJSON_AddNumberToObject(root, "id", id);
-    cJSON_AddNumberToObject(root, "timestamp", timestamp);
+    if (cJSON_AddNumberToObject(root, "id", (double)id) == NULL ||
+        cJSON_AddNumberToObject(root, "timestamp", (double)timestamp) == NULL) {
+        ret = ESP_ERR_NO_MEM;
+        goto out;
+    }
 
     payload = cJSON_PrintUnformatted(root);
     if (payload != NULL) {
+        ret = chat_message_ids_persist(id, boot_start_id);
+        if (ret != ESP_OK) {
+            free(payload);
+            goto out;
+        }
+
         if (message_buffer[message_buffer_head].payload != NULL) {
             free(message_buffer[message_buffer_head].payload);
         }
 
+        message_id_counter = id;
         message_buffer[message_buffer_head].payload = payload;
         message_buffer[message_buffer_head].id = id;
         message_buffer_head = (message_buffer_head + 1) % MAX_MESSAGES;
+        *payload_out = payload;
+    } else {
+        ret = ESP_ERR_NO_MEM;
     }
 
+out:
     xSemaphoreGive(message_mutex);
-    return payload;
+    return ret;
 }
 
 static esp_err_t handle_join_message(int fd, cJSON *root)
@@ -620,6 +845,7 @@ static esp_err_t handle_join_message(int fd, cJSON *root)
     }
 
     send_history_to_client(fd, json_since_id(root));
+    send_history_info_to_client(fd);
     send_online_users_to_client(fd);
     broadcast_online_users();
     return ESP_OK;
@@ -661,12 +887,162 @@ static esp_err_t handle_chat_message(int fd, cJSON *root)
         return send_error_to_client(fd, "unknown_type", "Unsupported chat message type");
     }
 
-    char *payload = finalize_and_store_message(root);
-    if (payload == NULL) {
-        return send_error_to_client(fd, "server_busy", "Unable to store message");
+    char *payload = NULL;
+    esp_err_t store_ret = finalize_and_store_message(root, &payload);
+    if (store_ret != ESP_OK || payload == NULL) {
+        if (store_ret == ESP_ERR_INVALID_SIZE) {
+            return send_error_to_client(fd, "id_exhausted", "Message id space is exhausted");
+        }
+        ESP_LOGW(TAG, "Unable to store message: %s", esp_err_to_name(store_ret));
+        return send_error_to_client(fd, "server_busy", "Unable to persist message id");
     }
 
     broadcast_message(payload);
+    broadcast_history_info();
+    return ESP_OK;
+}
+
+static bool validate_history_message_object(cJSON *message)
+{
+    if (!cJSON_IsObject(message)) {
+        return false;
+    }
+
+    cJSON *id = cJSON_GetObjectItem(message, "id");
+    cJSON *type = cJSON_GetObjectItem(message, "type");
+    cJSON *from = cJSON_GetObjectItem(message, "from");
+    cJSON *name = cJSON_GetObjectItem(message, "name");
+
+    if (!cJSON_IsNumber(id) ||
+        id->valuedouble <= 0 ||
+        id->valuedouble > (double)CHAT_MESSAGE_MAX_SAFE_ID ||
+        !json_string_in_range(type, 24, false) ||
+        !json_string_in_range(from, MAX_USER_ID_LEN, false) ||
+        !json_string_in_range(name, MAX_NAME_LEN, false) ||
+        !validate_to_object(message)) {
+        return false;
+    }
+
+    if (strcmp(type->valuestring, "text") == 0) {
+        return json_string_in_range(cJSON_GetObjectItem(message, "data"), MAX_TEXT_BYTES, false);
+    }
+
+    if (strcmp(type->valuestring, "newGroup") == 0) {
+        return json_string_in_range(cJSON_GetObjectItem(message, "groupId"), MAX_GROUP_ID_LEN, false) &&
+            json_string_in_range(cJSON_GetObjectItem(message, "groupName"), MAX_GROUP_NAME_LEN, false) &&
+            json_string_in_range(cJSON_GetObjectItem(message, "data"), MAX_TEXT_BYTES, true);
+    }
+
+    return false;
+}
+
+static bool history_response_targets_match_message(cJSON *root, cJSON *message)
+{
+    cJSON *to = cJSON_GetObjectItem(root, "to");
+    cJSON *users = cJSON_IsObject(to) ? cJSON_GetObjectItem(to, "users") : NULL;
+    if (!cJSON_IsArray(users) || cJSON_GetArraySize(users) == 0) {
+        return false;
+    }
+
+    cJSON *target = NULL;
+    cJSON_ArrayForEach(target, users) {
+        if (!json_string_in_range(target, MAX_USER_ID_LEN, false) ||
+            !message_visible_to_user(message, target->valuestring)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static esp_err_t handle_history_request_message(int fd, cJSON *root)
+{
+    cJSON *from = cJSON_GetObjectItem(root, "from");
+    cJSON *name = cJSON_GetObjectItem(root, "name");
+    cJSON *request_id = cJSON_GetObjectItem(root, "requestId");
+    cJSON *restore_before = cJSON_GetObjectItem(root, "restore_before_id");
+
+    if (!json_string_in_range(from, MAX_USER_ID_LEN, false) ||
+        !json_string_in_range(name, MAX_NAME_LEN, false) ||
+        !json_string_in_range(request_id, MAX_REQUEST_ID_LEN, false) ||
+        !cJSON_IsNumber(restore_before) ||
+        restore_before->valuedouble <= 1 ||
+        restore_before->valuedouble > (double)CHAT_MESSAGE_MAX_SAFE_ID) {
+        return send_error_to_client(fd, "bad_history_request", "History request is invalid");
+    }
+
+    update_client_identity(fd, from->valuestring, name->valuestring);
+
+    uint64_t requested_before = (uint64_t)restore_before->valuedouble;
+    uint64_t allowed_before = current_restore_before_id();
+    if (requested_before > allowed_before) {
+        requested_before = allowed_before;
+    }
+    if (requested_before <= 1) {
+        return send_error_to_client(fd, "no_restorable_history", "No older server history boundary is available");
+    }
+
+    cJSON_DeleteItemFromObjectCaseSensitive(root, "restore_before_id");
+    if (cJSON_AddNumberToObject(root, "restore_before_id", (double)requested_before) == NULL) {
+        return send_error_to_client(fd, "server_busy", "Unable to relay history request");
+    }
+
+    char *payload = cJSON_PrintUnformatted(root);
+    if (payload == NULL) {
+        return send_error_to_client(fd, "server_busy", "Unable to relay history request");
+    }
+
+    broadcast_message(payload);
+    free(payload);
+    return ESP_OK;
+}
+
+static esp_err_t handle_history_response_message(int fd, cJSON *root)
+{
+    cJSON *from = cJSON_GetObjectItem(root, "from");
+    cJSON *name = cJSON_GetObjectItem(root, "name");
+    cJSON *request_id = cJSON_GetObjectItem(root, "requestId");
+    cJSON *message = cJSON_GetObjectItem(root, "message");
+
+    if (!json_string_in_range(from, MAX_USER_ID_LEN, false) ||
+        !json_string_in_range(name, MAX_NAME_LEN, false) ||
+        !json_string_in_range(request_id, MAX_REQUEST_ID_LEN, false)) {
+        return send_error_to_client(fd, "bad_history_response", "History response is missing sender fields");
+    }
+    if (!validate_to_object(root)) {
+        return send_error_to_client(fd, "bad_history_response", "History response must target specific users");
+    }
+
+    cJSON *to = cJSON_GetObjectItem(root, "to");
+    if (cJSON_IsTrue(cJSON_GetObjectItem(to, "all"))) {
+        return send_error_to_client(fd, "bad_history_response", "History response must target specific users");
+    }
+    if (!validate_history_message_object(message)) {
+        return send_error_to_client(fd, "bad_history_response", "History response contains an invalid message");
+    }
+
+    cJSON *id = cJSON_GetObjectItem(message, "id");
+    uint64_t restore_before_id = current_restore_before_id();
+    if (id->valuedouble >= (double)restore_before_id) {
+        return send_error_to_client(fd, "bad_history_response", "History response is not older than the server boundary");
+    }
+    if (!history_response_targets_match_message(root, message)) {
+        return send_error_to_client(fd, "bad_history_response", "History response is not visible to the requested user");
+    }
+
+    update_client_identity(fd, from->valuestring, name->valuestring);
+
+    char *payload = cJSON_PrintUnformatted(root);
+    if (payload == NULL) {
+        return send_error_to_client(fd, "server_busy", "Unable to relay history response");
+    }
+
+    esp_err_t ret = relay_payload_to_targets(to, payload);
+    free(payload);
+    if (ret != ESP_OK) {
+        return send_error_to_client(fd, "relay_failed", "Unable to relay history response");
+    }
+
     return ESP_OK;
 }
 
@@ -695,6 +1071,14 @@ static esp_err_t handle_ws_json(int fd, cJSON *root)
         return handle_chat_message(fd, root);
     }
 
+    if (strcmp(type->valuestring, "historyRequest") == 0) {
+        return handle_history_request_message(fd, root);
+    }
+
+    if (strcmp(type->valuestring, "historyResponse") == 0) {
+        return handle_history_response_message(fd, root);
+    }
+
     return send_error_to_client(fd, "unknown_type", "Unsupported message type");
 }
 
@@ -710,6 +1094,14 @@ void app_main(void)
     client_mutex = xSemaphoreCreateMutex();
     message_mutex = xSemaphoreCreateMutex();
     assert(client_mutex && message_mutex);
+
+    chat_message_id_state_t id_state = { 0 };
+    esp_err_t id_ret = chat_message_ids_load(&id_state);
+    if (id_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Message ids may not persist until NVS recovers: %s", esp_err_to_name(id_ret));
+    }
+    message_id_counter = id_state.current_id;
+    boot_start_id = id_state.boot_start_id;
 
     load_chat_settings();
     wifi_init_softap();
