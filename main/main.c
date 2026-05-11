@@ -53,6 +53,9 @@
 #define SETTINGS_BODY_BYTES        512
 #define DNS_PACKET_BYTES           256
 #define DNS_ANSWER_BYTES           16
+#define HTTPD_INTERNAL_SOCKETS     3
+#define DNS_SERVER_SOCKETS         1
+#define HTTP_STATIC_SOCKET_MARGIN  2
 #define VALID_EPOCH_START_S        946684800LL
 #define VALID_EPOCH_END_S          4102444800LL
 
@@ -299,6 +302,12 @@ static esp_err_t send_error_to_client(int fd, const char *code, const char *mess
     return ret;
 }
 
+static void set_http_response_headers(httpd_req_t *req, const char *cache_control)
+{
+    httpd_resp_set_hdr(req, "Cache-Control", cache_control ? cache_control : "no-store");
+    httpd_resp_set_hdr(req, "Connection", "close");
+}
+
 static esp_err_t send_json_response(httpd_req_t *req, cJSON *root)
 {
     char *payload = cJSON_PrintUnformatted(root);
@@ -308,7 +317,7 @@ static esp_err_t send_json_response(httpd_req_t *req, cJSON *root)
     }
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    set_http_response_headers(req, "no-store");
     esp_err_t ret = httpd_resp_sendstr(req, payload);
     free(payload);
     return ret;
@@ -548,6 +557,8 @@ static bool update_client_identity(int fd, const char *user_id, const char *name
         return false;
     }
 
+    int free_slot = -1;
+    int same_user_slot = -1;
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (client_slots[i].active && client_slots[i].fd == fd) {
             copy_bounded(client_slots[i].user_id, sizeof(client_slots[i].user_id), user_id);
@@ -555,6 +566,26 @@ static bool update_client_identity(int fd, const char *user_id, const char *name
             client_slots[i].is_alive = true;
             updated = true;
             break;
+        }
+        if (client_slots[i].active && user_id != NULL && client_slots[i].user_id[0] != '\0' &&
+            strcmp(client_slots[i].user_id, user_id) == 0) {
+            same_user_slot = i;
+        }
+        if (!client_slots[i].active && free_slot < 0) {
+            free_slot = i;
+        }
+    }
+
+    if (!updated) {
+        int target = same_user_slot >= 0 ? same_user_slot : free_slot;
+        if (target >= 0) {
+            client_slots[target].fd = fd;
+            client_slots[target].active = true;
+            client_slots[target].is_alive = true;
+            copy_bounded(client_slots[target].user_id, sizeof(client_slots[target].user_id), user_id);
+            copy_bounded(client_slots[target].name, sizeof(client_slots[target].name), name);
+            updated = true;
+            ESP_LOGW(TAG, "Recovered missing WebSocket client slot for fd=%d", fd);
         }
     }
 
@@ -1289,7 +1320,7 @@ static esp_err_t redirect_to_root_handler(httpd_req_t *req)
 
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", location_url);
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    set_http_response_headers(req, "no-store");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
@@ -1302,15 +1333,21 @@ static httpd_handle_t start_webserver(void)
     config.max_uri_handlers = 12;
     config.lru_purge_enable = true;
 
-    int desired_sockets = MAX_CLIENTS + 3;
+    int desired_sockets = MAX_CLIENTS + HTTP_STATIC_SOCKET_MARGIN;
 #ifdef CONFIG_LWIP_MAX_SOCKETS
-    if (desired_sockets > CONFIG_LWIP_MAX_SOCKETS) {
-        desired_sockets = CONFIG_LWIP_MAX_SOCKETS;
+    int available_sockets = CONFIG_LWIP_MAX_SOCKETS - HTTPD_INTERNAL_SOCKETS - DNS_SERVER_SOCKETS;
+    if (available_sockets < 1) {
+        available_sockets = 1;
+    }
+    if (desired_sockets > available_sockets) {
+        desired_sockets = available_sockets;
+    }
+    if (desired_sockets < MAX_CLIENTS) {
+        ESP_LOGW(TAG, "Socket budget allows %d WebSocket sessions, below configured max clients=%d",
+                 desired_sockets, MAX_CLIENTS);
     }
 #endif
-    if (desired_sockets > config.max_open_sockets) {
-        config.max_open_sockets = desired_sockets;
-    }
+    config.max_open_sockets = desired_sockets;
 
     ESP_LOGI(TAG, "Starting webserver with max_open_sockets=%d", config.max_open_sockets);
 
@@ -1352,7 +1389,7 @@ static esp_err_t root_get_handler(httpd_req_t *req)
     extern const unsigned char index_html_end[]   asm("_binary_index_html_end");
     const size_t index_html_size = (index_html_end - index_html_start);
     httpd_resp_set_type(req, "text/html");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    set_http_response_headers(req, "no-store");
     httpd_resp_send(req, (const char *)index_html_start, index_html_size);
     return ESP_OK;
 }
@@ -1365,7 +1402,7 @@ static esp_err_t favicon_get_handler(httpd_req_t *req)
     const size_t favicon_ico_size = (favicon_ico_end - favicon_ico_start);
 
     httpd_resp_set_type(req, "image/x-icon");
-    httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=3600");
+    set_http_response_headers(req, "no-store");
     httpd_resp_send(req, (const char *)favicon_ico_start, favicon_ico_size);
     return ESP_OK;
 }
@@ -1378,7 +1415,7 @@ static esp_err_t style_get_handler(httpd_req_t *req)
     const size_t style_css_size = (style_css_end - style_css_start);
 
     httpd_resp_set_type(req, "text/css");
-    httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=3600");
+    set_http_response_headers(req, "no-store");
     httpd_resp_send(req, (const char *)style_css_start, style_css_size);
     return ESP_OK;
 }
@@ -1390,7 +1427,7 @@ static esp_err_t script_get_handler(httpd_req_t *req)
     const size_t script_js_size = (script_js_end - script_js_start);
 
     httpd_resp_set_type(req, "application/javascript");
-    httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=3600");
+    set_http_response_headers(req, "no-store");
     httpd_resp_send(req, (const char *)script_js_start, script_js_size);
     return ESP_OK;
 }

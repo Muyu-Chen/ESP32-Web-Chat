@@ -51,11 +51,14 @@ const MAX_LOCAL_MESSAGES = 2000;
 const MAX_OUTBOX_MESSAGES = 30;
 const MAX_SAFE_MESSAGE_ID = Number.MAX_SAFE_INTEGER;
 const HISTORY_RECOVERY_WINDOW_MS = 4000;
+const DEFAULT_AP_HOST = '192.168.4.1';
+const WS_FALLBACK_DELAY_MS = 250;
 
 let ws = null;
 let hasJoined = false;
 let reconnectTimer = null;
 let reconnectDelayMs = 1000;
+let wsUrlAttempt = 0;
 let allMessages = [];
 let conversations = {};
 let onlineUsers = new Map();
@@ -897,16 +900,52 @@ function scheduleReconnect() {
     }, reconnectDelayMs);
 }
 
+function websocketUrls() {
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const hosts = [];
+    const currentHost = window.location.host || DEFAULT_AP_HOST;
+
+    if (currentHost) {
+        hosts.push(currentHost);
+    }
+    if (!hosts.some((host) => host.split(':')[0] === DEFAULT_AP_HOST)) {
+        hosts.push(DEFAULT_AP_HOST);
+    }
+
+    return hosts.map((host) => `${protocol}://${host}/ws`);
+}
+
 function connect() {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
         return;
     }
 
     setStatus('connecting', 'Connecting...');
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${protocol}://${window.location.host}/ws`);
+    const urls = websocketUrls();
+    const url = urls[Math.min(wsUrlAttempt, urls.length - 1)];
+    let opened = false;
+
+    try {
+        ws = new WebSocket(url);
+    } catch (error) {
+        ws = null;
+        if (wsUrlAttempt < urls.length - 1) {
+            wsUrlAttempt += 1;
+            setStatus('connecting', 'Trying ESP32 address...');
+            setTimeout(connect, WS_FALLBACK_DELAY_MS);
+        } else {
+            wsUrlAttempt = 0;
+            setStatus('offline', 'Connection error');
+            if (hasJoined) {
+                scheduleReconnect();
+            }
+        }
+        return;
+    }
 
     ws.onopen = () => {
+        opened = true;
+        wsUrlAttempt = 0;
         hasJoined = true;
         reconnectDelayMs = 1000;
         setStatus('online', 'Connected');
@@ -926,6 +965,13 @@ function connect() {
             setRecoveryStatus('Recovery interrupted.');
         }
         updateRecoveryControls();
+        if (!opened && wsUrlAttempt < urls.length - 1) {
+            wsUrlAttempt += 1;
+            setStatus('connecting', 'Trying ESP32 address...');
+            setTimeout(connect, WS_FALLBACK_DELAY_MS);
+            return;
+        }
+        wsUrlAttempt = 0;
         if (hasJoined) {
             scheduleReconnect();
         } else {
@@ -1205,7 +1251,9 @@ backBtn.addEventListener('click', () => {
 createGroupBtn.addEventListener('click', openGroupModal);
 createGroupCancel.addEventListener('click', closeGroupModal);
 createGroupConfirm.addEventListener('click', createGroup);
-recoverHistoryBtn.addEventListener('click', startHistoryRecovery);
+if (recoverHistoryBtn) {
+    recoverHistoryBtn.addEventListener('click', startHistoryRecovery);
+}
 createGroupModal.addEventListener('click', (event) => {
     if (event.target === createGroupModal) {
         closeGroupModal();
