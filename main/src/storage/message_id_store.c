@@ -1,4 +1,4 @@
-#include "message_id_store.h"
+#include "storage/message_id_store.h"
 
 #include <inttypes.h>
 

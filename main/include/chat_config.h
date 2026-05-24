@@ -1,0 +1,33 @@
+#pragma once
+
+#include "sdkconfig.h"
+
+#define CHAT_WIFI_SSID             CONFIG_CHAT_WIFI_SSID
+#define CHAT_WIFI_PASS             CONFIG_CHAT_WIFI_PASSWORD
+#define CHAT_ADMIN_PASS            CONFIG_CHAT_ADMIN_PASSWORD
+#define CHAT_WIFI_CHANNEL          CONFIG_CHAT_WIFI_CHANNEL
+#define CHAT_MAX_STA_CONN          CONFIG_CHAT_MAX_STA_CONN
+#define MAX_CLIENTS                CONFIG_CHAT_MAX_WS_CLIENTS
+#define MAX_MESSAGES               CONFIG_CHAT_MESSAGE_HISTORY_SIZE
+#define HEARTBEAT_INTERVAL_S       CONFIG_CHAT_HEARTBEAT_INTERVAL_S
+#define MAX_TEXT_BYTES             CONFIG_CHAT_MAX_MESSAGE_TEXT_LEN
+#define MAX_WS_PAYLOAD_BYTES       CONFIG_CHAT_MAX_WS_PAYLOAD_BYTES
+
+#define MAX_USER_ID_LEN            63
+#define MAX_NAME_LEN               31
+#define MAX_REQUEST_ID_LEN         63
+#define MAX_GROUP_ID_LEN           63
+#define MAX_GROUP_NAME_LEN         63
+#define MAX_WIFI_SSID_LEN          32
+#define MIN_WIFI_PASS_LEN          8
+#define MAX_WIFI_PASS_LEN          63
+#define MIN_ADMIN_PASS_LEN         4
+#define MAX_ADMIN_PASS_LEN         32
+#define SETTINGS_BODY_BYTES        512
+#define DNS_PACKET_BYTES           256
+#define DNS_ANSWER_BYTES           16
+#define HTTPD_INTERNAL_SOCKETS     3
+#define DNS_SERVER_SOCKETS         1
+#define HTTP_STATIC_SOCKET_MARGIN  2
+#define VALID_EPOCH_START_S        946684800LL
+#define VALID_EPOCH_END_S          4102444800LL

@@ -1,3 +1,22 @@
-idf_component_register(SRCS "message_id_store.c" "main.c" "mount.c"
-                    INCLUDE_DIRS "."
-                    EMBED_FILES "favicon.ico" "src/index.html" "src/style.css" "src/script.js")
+idf_component_register(
+    SRCS
+        "src/main.c"
+        "src/common/settings.c"
+        "src/common/utils.c"
+        "src/network/softap.c"
+        "src/network/dns_server.c"
+        "src/server/http_server.c"
+        "src/server/websocket_server.c"
+        "src/chat/sessions.c"
+        "src/chat/history.c"
+        "src/chat/protocol.c"
+        "src/storage/message_id_store.c"
+        "src/storage/mount.c"
+    INCLUDE_DIRS
+        "include"
+    EMBED_FILES
+        "web/assets/favicon.ico"
+        "web/index.html"
+        "web/css/style.css"
+        "web/js/script.js"
+)
