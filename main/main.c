@@ -94,6 +94,7 @@ static SemaphoreHandle_t message_mutex;
 
 static chat_settings_t chat_settings;
 static httpd_handle_t server = NULL;
+static TaskHandle_t httpd_task_handle = NULL;
 
 static void load_chat_settings(void);
 static void wifi_init_softap(void);
@@ -105,6 +106,9 @@ static esp_err_t settings_get_handler(httpd_req_t *req);
 static esp_err_t settings_post_handler(httpd_req_t *req);
 static esp_err_t redirect_to_root_handler(httpd_req_t *req);
 static esp_err_t ws_handler(httpd_req_t *req);
+static bool remove_client_by_fd(int fd);
+static void close_client_session(int fd);
+static void http_session_close_handler(httpd_handle_t hd, int sockfd);
 static httpd_handle_t start_webserver(void);
 static void dns_server_task(void *pvParameters);
 static void heartbeat_task(void *pvParameters);
@@ -252,11 +256,18 @@ static esp_err_t send_text_to_fd(int fd, const char *payload)
     ws_pkt.payload = (uint8_t *)payload;
     ws_pkt.len = strlen(payload);
 
+    if (httpd_task_handle != NULL && xTaskGetCurrentTaskHandle() != httpd_task_handle) {
+        return httpd_ws_send_data(server, fd, &ws_pkt);
+    }
+
     return httpd_ws_send_frame_async(server, fd, &ws_pkt);
 }
 
 static void broadcast_message(const char *payload)
 {
+    int fds[MAX_CLIENTS];
+    int fd_count = 0;
+
     if (payload == NULL || xSemaphoreTake(client_mutex, portMAX_DELAY) != pdTRUE) {
         return;
     }
@@ -266,16 +277,20 @@ static void broadcast_message(const char *payload)
             continue;
         }
 
-        esp_err_t ret = send_text_to_fd(client_slots[i].fd, payload);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to send to fd=%d: %s", client_slots[i].fd, esp_err_to_name(ret));
-            client_slots[i].active = false;
-            client_slots[i].user_id[0] = '\0';
-            client_slots[i].name[0] = '\0';
+        if (fd_count < MAX_CLIENTS) {
+            fds[fd_count++] = client_slots[i].fd;
         }
     }
 
     xSemaphoreGive(client_mutex);
+
+    for (int i = 0; i < fd_count; i++) {
+        esp_err_t ret = send_text_to_fd(fds[i], payload);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to send to fd=%d: %s", fds[i], esp_err_to_name(ret));
+            close_client_session(fds[i]);
+        }
+    }
 }
 
 static esp_err_t send_error_to_client(int fd, const char *code, const char *message)
@@ -526,11 +541,13 @@ static esp_err_t relay_payload_to_targets(cJSON *to, const char *payload)
         return ESP_ERR_INVALID_ARG;
     }
 
+    int fds[MAX_CLIENTS];
+    int fd_count = 0;
+
     if (xSemaphoreTake(client_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
 
-    esp_err_t first_error = ESP_OK;
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (!client_slots[i].active || client_slots[i].user_id[0] == '\0') {
             continue;
@@ -539,19 +556,32 @@ static esp_err_t relay_payload_to_targets(cJSON *to, const char *payload)
             continue;
         }
 
-        esp_err_t ret = send_text_to_fd(client_slots[i].fd, payload);
-        if (ret != ESP_OK && first_error == ESP_OK) {
-            first_error = ret;
+        if (fd_count < MAX_CLIENTS) {
+            fds[fd_count++] = client_slots[i].fd;
         }
     }
 
     xSemaphoreGive(client_mutex);
+
+    esp_err_t first_error = ESP_OK;
+    for (int i = 0; i < fd_count; i++) {
+        esp_err_t ret = send_text_to_fd(fds[i], payload);
+        if (ret != ESP_OK && first_error == ESP_OK) {
+            first_error = ret;
+        }
+        if (ret != ESP_OK) {
+            close_client_session(fds[i]);
+        }
+    }
+
     return first_error;
 }
 
 static bool update_client_identity(int fd, const char *user_id, const char *name)
 {
     bool updated = false;
+    int stale_fds[MAX_CLIENTS];
+    int stale_count = 0;
 
     if (xSemaphoreTake(client_mutex, portMAX_DELAY) != pdTRUE) {
         return false;
@@ -559,13 +589,11 @@ static bool update_client_identity(int fd, const char *user_id, const char *name
 
     int free_slot = -1;
     int same_user_slot = -1;
+    int fd_slot = -1;
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (client_slots[i].active && client_slots[i].fd == fd) {
-            copy_bounded(client_slots[i].user_id, sizeof(client_slots[i].user_id), user_id);
-            copy_bounded(client_slots[i].name, sizeof(client_slots[i].name), name);
-            client_slots[i].is_alive = true;
-            updated = true;
-            break;
+            fd_slot = i;
+            continue;
         }
         if (client_slots[i].active && user_id != NULL && client_slots[i].user_id[0] != '\0' &&
             strcmp(client_slots[i].user_id, user_id) == 0) {
@@ -576,21 +604,87 @@ static bool update_client_identity(int fd, const char *user_id, const char *name
         }
     }
 
-    if (!updated) {
-        int target = same_user_slot >= 0 ? same_user_slot : free_slot;
-        if (target >= 0) {
-            client_slots[target].fd = fd;
-            client_slots[target].active = true;
-            client_slots[target].is_alive = true;
-            copy_bounded(client_slots[target].user_id, sizeof(client_slots[target].user_id), user_id);
-            copy_bounded(client_slots[target].name, sizeof(client_slots[target].name), name);
-            updated = true;
+    int target = fd_slot >= 0 ? fd_slot : (same_user_slot >= 0 ? same_user_slot : free_slot);
+    if (target >= 0) {
+        int old_target_fd = client_slots[target].fd;
+        client_slots[target].fd = fd;
+        client_slots[target].active = true;
+        client_slots[target].is_alive = true;
+        copy_bounded(client_slots[target].user_id, sizeof(client_slots[target].user_id), user_id);
+        copy_bounded(client_slots[target].name, sizeof(client_slots[target].name), name);
+        updated = true;
+
+        if (fd_slot < 0) {
             ESP_LOGW(TAG, "Recovered missing WebSocket client slot for fd=%d", fd);
+        }
+        if (fd_slot < 0 && same_user_slot >= 0 && target == same_user_slot &&
+            old_target_fd >= 0 && old_target_fd != fd && stale_count < MAX_CLIENTS) {
+            stale_fds[stale_count++] = old_target_fd;
+        }
+    }
+
+    if (updated && user_id != NULL) {
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (i == target || !client_slots[i].active || client_slots[i].user_id[0] == '\0') {
+                continue;
+            }
+            if (strcmp(client_slots[i].user_id, user_id) == 0) {
+                if (client_slots[i].fd >= 0 && client_slots[i].fd != fd && stale_count < MAX_CLIENTS) {
+                    stale_fds[stale_count++] = client_slots[i].fd;
+                }
+                client_slots[i].fd = -1;
+                client_slots[i].active = false;
+                client_slots[i].is_alive = false;
+                client_slots[i].user_id[0] = '\0';
+                client_slots[i].name[0] = '\0';
+            }
         }
     }
 
     xSemaphoreGive(client_mutex);
+
+    for (int i = 0; i < stale_count; i++) {
+        if (server != NULL) {
+            httpd_sess_trigger_close(server, stale_fds[i]);
+        }
+    }
+
     return updated;
+}
+
+static bool ensure_client_slot(int fd)
+{
+    bool ready = false;
+
+    if (xSemaphoreTake(client_mutex, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (client_slots[i].active && client_slots[i].fd == fd) {
+            client_slots[i].is_alive = true;
+            ready = true;
+            break;
+        }
+    }
+
+    if (!ready) {
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (!client_slots[i].active) {
+                client_slots[i].fd = fd;
+                client_slots[i].active = true;
+                client_slots[i].is_alive = true;
+                client_slots[i].user_id[0] = '\0';
+                copy_bounded(client_slots[i].name, sizeof(client_slots[i].name), "New User");
+                ready = true;
+                ESP_LOGI(TAG, "Registered WebSocket client slot for fd=%d", fd);
+                break;
+            }
+        }
+    }
+
+    xSemaphoreGive(client_mutex);
+    return ready;
 }
 
 static bool mark_client_alive(int fd)
@@ -623,6 +717,7 @@ static bool remove_client_by_fd(int fd)
 
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (client_slots[i].active && client_slots[i].fd == fd) {
+            client_slots[i].fd = -1;
             client_slots[i].active = false;
             client_slots[i].is_alive = false;
             client_slots[i].user_id[0] = '\0';
@@ -634,6 +729,31 @@ static bool remove_client_by_fd(int fd)
 
     xSemaphoreGive(client_mutex);
     return removed;
+}
+
+static void close_client_session(int fd)
+{
+    if (fd < 0) {
+        return;
+    }
+
+    remove_client_by_fd(fd);
+    if (server != NULL) {
+        httpd_sess_trigger_close(server, fd);
+    }
+}
+
+static void http_session_close_handler(httpd_handle_t hd, int sockfd)
+{
+    (void)hd;
+
+    if (remove_client_by_fd(sockfd)) {
+        ESP_LOGI(TAG, "Closed WebSocket client slot for fd=%d", sockfd);
+    }
+
+    if (sockfd >= 0) {
+        close(sockfd);
+    }
 }
 
 static char *build_online_users_payload(void)
@@ -1152,6 +1272,10 @@ static void heartbeat_task(void *pvParameters)
         vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_INTERVAL_S * 1000));
 
         bool changed = false;
+        int ping_fds[MAX_CLIENTS];
+        int ping_count = 0;
+        int close_fds[MAX_CLIENTS];
+        int close_count = 0;
         if (xSemaphoreTake(client_mutex, portMAX_DELAY) != pdTRUE) {
             continue;
         }
@@ -1163,8 +1287,12 @@ static void heartbeat_task(void *pvParameters)
 
             if (!client_slots[i].is_alive) {
                 ESP_LOGW(TAG, "Client fd=%d missed heartbeat; closing", client_slots[i].fd);
-                httpd_sess_trigger_close(server, client_slots[i].fd);
+                if (close_count < MAX_CLIENTS) {
+                    close_fds[close_count++] = client_slots[i].fd;
+                }
+                client_slots[i].fd = -1;
                 client_slots[i].active = false;
+                client_slots[i].is_alive = false;
                 client_slots[i].user_id[0] = '\0';
                 client_slots[i].name[0] = '\0';
                 changed = true;
@@ -1172,15 +1300,27 @@ static void heartbeat_task(void *pvParameters)
             }
 
             client_slots[i].is_alive = false;
-            esp_err_t ret = send_text_to_fd(client_slots[i].fd, ping_payload);
-            if (ret != ESP_OK) {
-                ESP_LOGW(TAG, "Ping failed for fd=%d: %s", client_slots[i].fd, esp_err_to_name(ret));
-                client_slots[i].active = false;
-                changed = true;
+            if (ping_count < MAX_CLIENTS) {
+                ping_fds[ping_count++] = client_slots[i].fd;
             }
         }
 
         xSemaphoreGive(client_mutex);
+
+        for (int i = 0; i < close_count; i++) {
+            if (server != NULL) {
+                httpd_sess_trigger_close(server, close_fds[i]);
+            }
+        }
+
+        for (int i = 0; i < ping_count; i++) {
+            esp_err_t ret = send_text_to_fd(ping_fds[i], ping_payload);
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "Ping failed for fd=%d: %s", ping_fds[i], esp_err_to_name(ret));
+                close_client_session(ping_fds[i]);
+                changed = true;
+            }
+        }
 
         if (changed) {
             broadcast_online_users();
@@ -1332,6 +1472,7 @@ static httpd_handle_t start_webserver(void)
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.max_uri_handlers = 12;
     config.lru_purge_enable = true;
+    config.close_fn = http_session_close_handler;
 
     int desired_sockets = MAX_CLIENTS + HTTP_STATIC_SOCKET_MARGIN;
 #ifdef CONFIG_LWIP_MAX_SOCKETS
@@ -1556,33 +1697,13 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
 static esp_err_t ws_handler(httpd_req_t *req)
 {
     int fd = httpd_req_to_sockfd(req);
+    if (httpd_task_handle == NULL) {
+        httpd_task_handle = xTaskGetCurrentTaskHandle();
+    }
 
-    if (req->method == HTTP_GET) {
-        ESP_LOGI(TAG, "WebSocket handshake complete, fd=%d", fd);
-
-        bool added = false;
-        if (xSemaphoreTake(client_mutex, portMAX_DELAY) == pdTRUE) {
-            for (int i = 0; i < MAX_CLIENTS; i++) {
-                if (!client_slots[i].active) {
-                    client_slots[i].fd = fd;
-                    client_slots[i].active = true;
-                    client_slots[i].is_alive = true;
-                    copy_bounded(client_slots[i].name, sizeof(client_slots[i].name), "New User");
-                    client_slots[i].user_id[0] = '\0';
-                    added = true;
-                    break;
-                }
-            }
-            xSemaphoreGive(client_mutex);
-        }
-
-        if (!added) {
-            ESP_LOGW(TAG, "Max clients reached; rejecting fd=%d", fd);
-            httpd_sess_trigger_close(server, fd);
-            return ESP_FAIL;
-        }
-
-        return ESP_OK;
+    if (!ensure_client_slot(fd)) {
+        ESP_LOGW(TAG, "Max clients reached; rejecting fd=%d", fd);
+        return ESP_FAIL;
     }
 
     httpd_ws_frame_t ws_pkt;
@@ -1597,10 +1718,19 @@ static esp_err_t ws_handler(httpd_req_t *req)
             if (remove_client_by_fd(fd)) {
                 broadcast_online_users();
             }
-        } else if (err != EAGAIN && err != EWOULDBLOCK) {
+            return ret;
+        }
+        if (err == EAGAIN || err == EWOULDBLOCK) {
+            return ESP_OK;
+        }
+
+        if (remove_client_by_fd(fd)) {
+            broadcast_online_users();
+        }
+        if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Frame probe failed for fd=%d ret=%d errno=%d", fd, ret, err);
         }
-        return ESP_OK;
+        return ret;
     }
 
     if (ws_pkt.len == 0) {
@@ -1610,10 +1740,10 @@ static esp_err_t ws_handler(httpd_req_t *req)
     if (ws_pkt.len > MAX_WS_PAYLOAD_BYTES) {
         ESP_LOGW(TAG, "Payload too large from fd=%d: %d bytes", fd, (int)ws_pkt.len);
         send_error_to_client(fd, "payload_too_large", "WebSocket payload is too large");
-        httpd_sess_trigger_close(server, fd);
-        remove_client_by_fd(fd);
-        broadcast_online_users();
-        return ESP_OK;
+        if (remove_client_by_fd(fd)) {
+            broadcast_online_users();
+        }
+        return ESP_FAIL;
     }
 
     uint8_t *buf = calloc(1, ws_pkt.len + 1);
@@ -1627,7 +1757,10 @@ static esp_err_t ws_handler(httpd_req_t *req)
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Frame receive failed for fd=%d: %s", fd, esp_err_to_name(ret));
         free(buf);
-        return ESP_OK;
+        if (remove_client_by_fd(fd)) {
+            broadcast_online_users();
+        }
+        return ret;
     }
 
     if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {

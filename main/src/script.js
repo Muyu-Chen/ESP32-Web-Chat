@@ -936,9 +936,7 @@ function connect() {
         } else {
             wsUrlAttempt = 0;
             setStatus('offline', 'Connection error');
-            if (hasJoined) {
-                scheduleReconnect();
-            }
+            scheduleReconnect();
         }
         return;
     }
@@ -972,11 +970,8 @@ function connect() {
             return;
         }
         wsUrlAttempt = 0;
-        if (hasJoined) {
-            scheduleReconnect();
-        } else {
-            setStatus('offline', 'Disconnected');
-        }
+        setStatus('offline', opened || hasJoined ? 'Disconnected' : 'Connection error');
+        scheduleReconnect();
     };
 
     ws.onerror = () => {
