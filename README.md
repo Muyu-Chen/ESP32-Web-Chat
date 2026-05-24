@@ -125,7 +125,17 @@ ESP32-Web-Chat/
 └── README-CN.md
 ```
 
-For implementation details and maintenance guidance, start with [docs/overview.md](docs/overview.md).
+## Documentation
+
+Start with [docs/overview.md](docs/overview.md) for the current architecture and maintenance map.
+
+| Document | Purpose |
+| --- | --- |
+| [Overview](docs/overview.md) | Project layout, module responsibilities, and where to change features |
+| [Architecture](docs/architecture.md) | Startup flow, shared context, FreeRTOS tasks, and locking |
+| [Protocol](docs/protocol.md) | HTTP API, WebSocket messages, errors, and history recovery |
+| [Maintenance](docs/maintenance.md) | How to add or remove common features |
+| [Build and Flash](docs/build-and-flash.md) | ESP-IDF build, flashing, partitions, and troubleshooting |
 
 ## Configuration
 

@@ -121,7 +121,17 @@ ESP32-Web-Chat/
 └── README-CN.md
 ```
 
+## 文档
+
 代码结构和后续维护说明请从 [docs/overview.md](docs/overview.md) 开始阅读。
+
+| 文档 | 用途 |
+| --- | --- |
+| [Overview](docs/overview.md) | 项目布局、模块职责、功能修改入口 |
+| [Architecture](docs/architecture.md) | 启动流程、共享上下文、FreeRTOS 任务和锁 |
+| [Protocol](docs/protocol.md) | HTTP API、WebSocket 消息、错误格式和历史恢复 |
+| [Maintenance](docs/maintenance.md) | 新增或删除常见功能的维护路径 |
+| [Build and Flash](docs/build-and-flash.md) | ESP-IDF 构建、烧录、分区和排错 |
 
 ## 配置选项
 
