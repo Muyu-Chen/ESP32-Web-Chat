@@ -96,13 +96,27 @@ For the Chinese version, see [README-CN.md](README-CN.md).
 ```text
 ESP32-Web-Chat/
 ├── main/
-│   ├── main.c
-│   ├── mount.c
-│   ├── favicon.ico
-│   └── src/
-│       ├── index.html
-│       ├── style.css
-│       └── script.js
+│   ├── include/
+│   ├── src/
+│   │   ├── main.c
+│   │   ├── common/
+│   │   ├── network/
+│   │   ├── server/
+│   │   ├── chat/
+│   │   └── storage/
+│   ├── web/
+│   │   ├── index.html
+│   │   ├── css/
+│   │   ├── js/
+│   │   └── assets/
+│   ├── CMakeLists.txt
+│   └── Kconfig.projbuild
+├── docs/
+│   ├── overview.md
+│   ├── architecture.md
+│   ├── protocol.md
+│   ├── maintenance.md
+│   └── build-and-flash.md
 ├── CMakeLists.txt
 ├── sdkconfig.defaults
 ├── partitions_example.csv
@@ -110,6 +124,8 @@ ESP32-Web-Chat/
 ├── README.md
 └── README-CN.md
 ```
+
+For implementation details and maintenance guidance, start with [docs/overview.md](docs/overview.md).
 
 ## Configuration
 
