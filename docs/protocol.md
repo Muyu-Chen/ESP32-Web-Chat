@@ -68,6 +68,13 @@
 
 WebSocket 路径是 `/ws`，只支持文本 JSON 帧。
 
+通用规则：
+
+- 除 `join` 和 `pong` 外，客户端必须先完成 `join`，后续消息的 `from` 必须与已注册身份一致。
+- 客户端可在任意消息中携带 `timestamp` 作为设备时间同步样本；服务端发送和入库的消息时间戳由 ESP32 统一生成。
+- ESP32 在 RTC 时间无效时使用在线客户端时间多数派：至少三分之二有效时间样本在 120 秒内误差一致时，采用该多数派时间；否则回退到设备运行秒数。
+- 非文本帧、非法 JSON、未知类型、非法身份、超长 payload 或字段越界都会返回 `error` 消息。
+
 ### 客户端发送 `join`
 
 ```json
@@ -83,7 +90,8 @@ WebSocket 路径是 `/ws`，只支持文本 JSON 帧。
 行为：
 
 - 绑定 socket 与用户身份。
-- 回放 `id > since_id` 的服务端缓存消息。
+- `since_id` 可省略；存在时必须是 `0..9007199254740991` 的整数，否则返回 `bad_since_id`。
+- 回放 `id > since_id` 的服务端缓存消息；如果 `since_id` 已经大于当前最新消息，则不重复回放。
 - 返回 `historyInfo`。
 - 返回并广播 `onlineUsers`。
 
@@ -143,11 +151,12 @@ WebSocket 路径是 `/ws`，只支持文本 JSON 帧。
 ```json
 {
   "type": "pong",
-  "from": "user-uuid"
+  "from": "user-uuid",
+  "timestamp": 1710000000
 }
 ```
 
-用于回应服务端心跳。
+用于回应服务端心跳。`timestamp` 推荐携带，用于服务端时间多数派同步；旧客户端不携带也兼容。
 
 ### 历史恢复
 
@@ -218,6 +227,8 @@ WebSocket 路径是 `/ws`，只支持文本 JSON 帧。
 }
 ```
 
+`onlineUsers.data` 只包含已完成 `join` 且连接仍存活的 WebSocket 用户。连接关闭、重复登录替换、心跳超时或发送失败清理后，服务端会广播最新列表。
+
 ### `historyInfo`
 
 ```json
@@ -251,3 +262,5 @@ WebSocket 路径是 `/ws`，只支持文本 JSON 帧。
   "timestamp": 1710000000
 }
 ```
+
+常见错误码包括 `bad_json`、`bad_type`、`unknown_type`、`not_joined`、`bad_identity`、`bad_since_id`、`bad_target`、`payload_too_large`。

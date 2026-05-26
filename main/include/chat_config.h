@@ -13,6 +13,7 @@
 #define MAX_TEXT_BYTES             CONFIG_CHAT_MAX_MESSAGE_TEXT_LEN
 #define MAX_WS_PAYLOAD_BYTES       CONFIG_CHAT_MAX_WS_PAYLOAD_BYTES
 
+#define TIME_SYNC_TOLERANCE_S      120
 #define MAX_USER_ID_LEN            63
 #define MAX_NAME_LEN               31
 #define MAX_REQUEST_ID_LEN         63

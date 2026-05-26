@@ -34,8 +34,10 @@ esp_err_t chat_ws_send_text(app_context_t *ctx, int fd, const char *payload)
 
 void chat_ws_broadcast(app_context_t *ctx, const char *payload)
 {
+    static bool presence_update_in_progress = false;
     int fds[MAX_CLIENTS];
     int fd_count = 0;
+    bool closed_client = false;
 
     if (ctx == NULL || payload == NULL || xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) != pdTRUE) {
         return;
@@ -58,7 +60,14 @@ void chat_ws_broadcast(app_context_t *ctx, const char *payload)
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Failed to send to fd=%d: %s", fds[i], esp_err_to_name(ret));
             chat_ws_close_client(ctx, fds[i]);
+            closed_client = true;
         }
+    }
+
+    if (closed_client && !presence_update_in_progress) {
+        presence_update_in_progress = true;
+        chat_sessions_broadcast_online_users(ctx);
+        presence_update_in_progress = false;
     }
 }
 
@@ -73,7 +82,7 @@ esp_err_t chat_ws_send_error(app_context_t *ctx, int fd, const char *code, const
     cJSON_AddStringToObject(root, "from", "server");
     cJSON_AddStringToObject(root, "code", code ? code : "error");
     cJSON_AddStringToObject(root, "data", message ? message : "Request failed");
-    cJSON_AddNumberToObject(root, "timestamp", current_timestamp_s(NULL));
+    cJSON_AddNumberToObject(root, "timestamp", current_timestamp_s(ctx));
 
     char *payload = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -104,6 +113,7 @@ void chat_ws_session_close_handler(httpd_handle_t hd, int sockfd)
 
     if (chat_sessions_remove_by_fd(&g_app_context, sockfd)) {
         ESP_LOGI(TAG, "Closed WebSocket client slot for fd=%d", sockfd);
+        chat_sessions_broadcast_online_users(&g_app_context);
     }
 
     if (sockfd >= 0) {

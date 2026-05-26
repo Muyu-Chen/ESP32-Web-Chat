@@ -184,10 +184,11 @@ Contributions are welcome. A typical workflow looks like this:
 
 - [x] Add NVS-backed browser settings for Wi-Fi SSID, password, and channel so deployments do not require source edits
 - [x] Build a small admin-password-protected setup panel for changing hotspot credentials and the settings password from the browser
-- [ ] Assign message IDs and timestamps on the ESP32, validate incoming JSON fields, clamp payload sizes, and return clear errors for malformed WebSocket frames
-- [ ] Implement `since_id` history sync so reconnecting clients only replay missed messages instead of receiving the whole ring buffer
+- [x] Assign message IDs and timestamps on the ESP32, validate incoming JSON fields, clamp payload sizes, and return clear errors for malformed WebSocket frames
+- [x] Implement `since_id` history sync so reconnecting clients only replay missed messages instead of receiving the whole ring buffer
 - [ ] Add optional persistent history in NVS, SPIFFS, or SD card storage with retention controls and a clear-room action
-- [ ] Complete online user presence with nickname registration, join and leave notices, user list updates, and heartbeat-driven cleanup visible in the UI
+- [x] Complete online user presence basics with nickname registration, online list updates, and heartbeat-driven cleanup visible in the UI
+- [ ] Add optional join and leave system notices
 - [ ] Finish private chat and group chat flows, or hide unfinished conversation-list UI until the backend protocol fully supports it
 - [ ] Improve reconnect UX with exponential backoff, connection-state badges, an offline send queue, and duplicate-message prevention across reloads
 - [ ] Harden captive portal support for iOS, Android, and Windows detection URLs, safer DNS response bounds checking, and clearer fallback instructions

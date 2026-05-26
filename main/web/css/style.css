@@ -451,6 +451,21 @@ input {
     border-color: var(--primary-color);
 }
 
+.conversation-item-online {
+    border-color: rgba(25, 135, 84, 0.45);
+}
+
+.conversation-item-online strong::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 8px;
+    border-radius: 50%;
+    background: var(--success-color);
+    box-shadow: 0 0 0 4px rgba(25, 135, 84, 0.12);
+}
+
 .conversation-item span,
 .conversation-item small {
     overflow: hidden;

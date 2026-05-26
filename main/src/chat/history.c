@@ -12,22 +12,35 @@
 
 static const char *TAG = "CHAT_HISTORY";
 
-uint64_t chat_history_json_since_id(const cJSON *root)
+bool chat_history_parse_since_id(const cJSON *root, uint64_t *since_id_out)
 {
     cJSON *since_id = cJSON_GetObjectItem(root, "since_id");
-    if (!cJSON_IsNumber(since_id)) {
+    if (since_id == NULL) {
         since_id = cJSON_GetObjectItem(root, "last_seen_id");
     }
 
-    if (!cJSON_IsNumber(since_id) || since_id->valuedouble <= 0) {
-        return 0;
+    if (since_id_out == NULL) {
+        return false;
+    }
+    *since_id_out = 0;
+
+    if (since_id == NULL) {
+        return true;
     }
 
-    if (since_id->valuedouble > (double)CHAT_MESSAGE_MAX_SAFE_ID) {
-        return CHAT_MESSAGE_MAX_SAFE_ID;
+    if (!cJSON_IsNumber(since_id) ||
+        since_id->valuedouble < 0 ||
+        since_id->valuedouble > (double)CHAT_MESSAGE_MAX_SAFE_ID) {
+        return false;
     }
 
-    return (uint64_t)since_id->valuedouble;
+    uint64_t parsed = (uint64_t)since_id->valuedouble;
+    if ((double)parsed != since_id->valuedouble) {
+        return false;
+    }
+
+    *since_id_out = parsed;
+    return true;
 }
 
 void chat_history_fill_bounds_locked(app_context_t *ctx, history_bounds_t *bounds)
@@ -84,7 +97,7 @@ char *chat_history_build_info_payload(app_context_t *ctx)
 
     cJSON_AddStringToObject(root, "type", "historyInfo");
     cJSON_AddStringToObject(root, "from", "server");
-    cJSON_AddNumberToObject(root, "timestamp", current_timestamp_s(NULL));
+    cJSON_AddNumberToObject(root, "timestamp", current_timestamp_s(ctx));
 
     cJSON *to = cJSON_AddObjectToObject(root, "to");
     cJSON *users = to ? cJSON_AddArrayToObject(to, "users") : NULL;
@@ -143,12 +156,16 @@ void chat_history_broadcast_info(app_context_t *ctx)
 
 void chat_history_send_to_client(app_context_t *ctx, int fd, uint64_t since_id)
 {
+    char *payloads[MAX_MESSAGES] = { 0 };
+    bool allocation_failed = false;
+    bool send_failed = false;
+    int count = 0;
+
     if (ctx == NULL || xSemaphoreTake(ctx->message_mutex, portMAX_DELAY) != pdTRUE) {
         chat_ws_send_error(ctx, fd, "server_busy", "Message history is temporarily unavailable");
         return;
     }
 
-    int sent = 0;
     int current_pos = ctx->message_buffer_head;
     for (int i = 0; i < MAX_MESSAGES; i++) {
         int index = (current_pos + i) % MAX_MESSAGES;
@@ -156,16 +173,42 @@ void chat_history_send_to_client(app_context_t *ctx, int fd, uint64_t since_id)
             continue;
         }
 
-        esp_err_t ret = chat_ws_send_text(ctx, fd, ctx->message_buffer[index].payload);
-        if (ret == ESP_OK) {
-            sent++;
-        } else {
-            ESP_LOGW(TAG, "History send failed for fd=%d: %s", fd, esp_err_to_name(ret));
+        size_t len = strlen(ctx->message_buffer[index].payload);
+        payloads[count] = malloc(len + 1);
+        if (payloads[count] == NULL) {
+            allocation_failed = true;
             break;
         }
+        memcpy(payloads[count], ctx->message_buffer[index].payload, len + 1);
+        count++;
     }
 
     xSemaphoreGive(ctx->message_mutex);
+
+    int sent = 0;
+    for (int i = 0; i < count; i++) {
+        esp_err_t ret = chat_ws_send_text(ctx, fd, payloads[i]);
+        free(payloads[i]);
+        payloads[i] = NULL;
+        if (ret == ESP_OK) {
+            sent++;
+            continue;
+        }
+
+        ESP_LOGW(TAG, "History send failed for fd=%d: %s", fd, esp_err_to_name(ret));
+        chat_ws_close_client(ctx, fd);
+        send_failed = true;
+        break;
+    }
+
+    for (int i = 0; i < count; i++) {
+        free(payloads[i]);
+    }
+
+    if (allocation_failed && !send_failed) {
+        chat_ws_send_error(ctx, fd, "server_busy", "Message history is temporarily unavailable");
+    }
+
     ESP_LOGI(TAG, "Sent %d history messages to fd=%d since_id=%" PRIu64, sent, fd, since_id);
 }
 
@@ -189,7 +232,7 @@ esp_err_t chat_history_finalize_and_store_message(app_context_t *ctx, cJSON *roo
     }
 
     uint64_t id = ctx->message_id_counter + 1;
-    int64_t timestamp = current_timestamp_s(root);
+    int64_t timestamp = current_timestamp_s(ctx);
 
     cJSON_DeleteItemFromObjectCaseSensitive(root, "id");
     cJSON_DeleteItemFromObjectCaseSensitive(root, "timestamp");

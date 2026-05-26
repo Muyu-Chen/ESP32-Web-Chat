@@ -12,6 +12,22 @@
 
 static const char *TAG = "CHAT_SESSIONS";
 
+static void clear_slot_identity(client_slot_t *slot)
+{
+    if (slot == NULL) {
+        return;
+    }
+
+    slot->fd = -1;
+    slot->active = false;
+    slot->joined = false;
+    slot->is_alive = false;
+    slot->time_offset_valid = false;
+    slot->time_offset_s = 0;
+    slot->user_id[0] = '\0';
+    slot->name[0] = '\0';
+}
+
 bool chat_sessions_update_identity(app_context_t *ctx, int fd, const char *user_id, const char *name)
 {
     bool updated = false;
@@ -42,9 +58,18 @@ bool chat_sessions_update_identity(app_context_t *ctx, int fd, const char *user_
     int target = fd_slot >= 0 ? fd_slot : (same_user_slot >= 0 ? same_user_slot : free_slot);
     if (target >= 0) {
         int old_target_fd = ctx->client_slots[target].fd;
+        bool identity_changed = old_target_fd != fd ||
+            ctx->client_slots[target].user_id[0] == '\0' ||
+            user_id == NULL ||
+            strcmp(ctx->client_slots[target].user_id, user_id) != 0;
         ctx->client_slots[target].fd = fd;
         ctx->client_slots[target].active = true;
+        ctx->client_slots[target].joined = true;
         ctx->client_slots[target].is_alive = true;
+        if (identity_changed) {
+            ctx->client_slots[target].time_offset_valid = false;
+            ctx->client_slots[target].time_offset_s = 0;
+        }
         copy_bounded(ctx->client_slots[target].user_id, sizeof(ctx->client_slots[target].user_id), user_id);
         copy_bounded(ctx->client_slots[target].name, sizeof(ctx->client_slots[target].name), name);
         updated = true;
@@ -67,11 +92,7 @@ bool chat_sessions_update_identity(app_context_t *ctx, int fd, const char *user_
                 if (ctx->client_slots[i].fd >= 0 && ctx->client_slots[i].fd != fd && stale_count < MAX_CLIENTS) {
                     stale_fds[stale_count++] = ctx->client_slots[i].fd;
                 }
-                ctx->client_slots[i].fd = -1;
-                ctx->client_slots[i].active = false;
-                ctx->client_slots[i].is_alive = false;
-                ctx->client_slots[i].user_id[0] = '\0';
-                ctx->client_slots[i].name[0] = '\0';
+                clear_slot_identity(&ctx->client_slots[i]);
             }
         }
     }
@@ -108,7 +129,10 @@ bool chat_sessions_ensure_slot(app_context_t *ctx, int fd)
             if (!ctx->client_slots[i].active) {
                 ctx->client_slots[i].fd = fd;
                 ctx->client_slots[i].active = true;
+                ctx->client_slots[i].joined = false;
                 ctx->client_slots[i].is_alive = true;
+                ctx->client_slots[i].time_offset_valid = false;
+                ctx->client_slots[i].time_offset_s = 0;
                 ctx->client_slots[i].user_id[0] = '\0';
                 copy_bounded(ctx->client_slots[i].name, sizeof(ctx->client_slots[i].name), "New User");
                 ready = true;
@@ -120,6 +144,72 @@ bool chat_sessions_ensure_slot(app_context_t *ctx, int fd)
 
     xSemaphoreGive(ctx->client_mutex);
     return ready;
+}
+
+bool chat_sessions_is_joined(app_context_t *ctx, int fd)
+{
+    bool joined = false;
+
+    if (ctx == NULL || xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (ctx->client_slots[i].active && ctx->client_slots[i].fd == fd) {
+            joined = ctx->client_slots[i].joined && ctx->client_slots[i].user_id[0] != '\0';
+            break;
+        }
+    }
+
+    xSemaphoreGive(ctx->client_mutex);
+    return joined;
+}
+
+bool chat_sessions_identity_matches(app_context_t *ctx, int fd, const char *user_id)
+{
+    bool matches = false;
+
+    if (ctx == NULL || user_id == NULL || xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (ctx->client_slots[i].active && ctx->client_slots[i].fd == fd) {
+            matches = ctx->client_slots[i].joined &&
+                ctx->client_slots[i].user_id[0] != '\0' &&
+                strcmp(ctx->client_slots[i].user_id, user_id) == 0;
+            break;
+        }
+    }
+
+    xSemaphoreGive(ctx->client_mutex);
+    return matches;
+}
+
+void chat_sessions_update_time_sample(app_context_t *ctx, int fd, const cJSON *root)
+{
+    cJSON *timestamp = root ? cJSON_GetObjectItem(root, "timestamp") : NULL;
+    if (ctx == NULL ||
+        !cJSON_IsNumber(timestamp) ||
+        timestamp->valuedouble < VALID_EPOCH_START_S ||
+        timestamp->valuedouble > VALID_EPOCH_END_S) {
+        return;
+    }
+
+    int64_t offset = (int64_t)timestamp->valuedouble - device_uptime_s();
+    if (xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (ctx->client_slots[i].active && ctx->client_slots[i].joined && ctx->client_slots[i].fd == fd) {
+            ctx->client_slots[i].time_offset_s = offset;
+            ctx->client_slots[i].time_offset_valid = true;
+            break;
+        }
+    }
+
+    xSemaphoreGive(ctx->client_mutex);
 }
 
 bool chat_sessions_mark_alive(app_context_t *ctx, int fd)
@@ -152,11 +242,7 @@ bool chat_sessions_remove_by_fd(app_context_t *ctx, int fd)
 
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (ctx->client_slots[i].active && ctx->client_slots[i].fd == fd) {
-            ctx->client_slots[i].fd = -1;
-            ctx->client_slots[i].active = false;
-            ctx->client_slots[i].is_alive = false;
-            ctx->client_slots[i].user_id[0] = '\0';
-            ctx->client_slots[i].name[0] = '\0';
+            clear_slot_identity(&ctx->client_slots[i]);
             removed = true;
             break;
         }
@@ -181,7 +267,7 @@ char *chat_sessions_build_online_users_payload(app_context_t *ctx)
 
     cJSON_AddStringToObject(root, "type", "onlineUsers");
     cJSON_AddStringToObject(root, "from", "server");
-    cJSON_AddNumberToObject(root, "timestamp", current_timestamp_s(NULL));
+    cJSON_AddNumberToObject(root, "timestamp", current_timestamp_s(ctx));
 
     to = cJSON_AddObjectToObject(root, "to");
     users = to ? cJSON_AddArrayToObject(to, "users") : NULL;
@@ -194,7 +280,7 @@ char *chat_sessions_build_online_users_payload(app_context_t *ctx)
 
     if (xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) == pdTRUE) {
         for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (!ctx->client_slots[i].active || ctx->client_slots[i].user_id[0] == '\0') {
+            if (!ctx->client_slots[i].active || !ctx->client_slots[i].joined || ctx->client_slots[i].user_id[0] == '\0') {
                 continue;
             }
 
@@ -269,11 +355,7 @@ static void heartbeat_task(void *pvParameters)
                 if (close_count < MAX_CLIENTS) {
                     close_fds[close_count++] = ctx->client_slots[i].fd;
                 }
-                ctx->client_slots[i].fd = -1;
-                ctx->client_slots[i].active = false;
-                ctx->client_slots[i].is_alive = false;
-                ctx->client_slots[i].user_id[0] = '\0';
-                ctx->client_slots[i].name[0] = '\0';
+                clear_slot_identity(&ctx->client_slots[i]);
                 changed = true;
                 continue;
             }

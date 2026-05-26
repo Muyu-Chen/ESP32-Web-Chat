@@ -8,7 +8,10 @@
 typedef struct {
     int fd;
     bool active;
+    bool joined;
     bool is_alive;
+    bool time_offset_valid;
+    int64_t time_offset_s;
     char user_id[MAX_USER_ID_LEN + 1];
     char name[MAX_NAME_LEN + 1];
 } client_slot_t;

@@ -10,3 +10,6 @@ partitions_example.csv.bin
 .vscode/
 managed_components/
 .DS_Store
+
+# dev notes
+*.temp.*

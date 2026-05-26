@@ -181,6 +181,10 @@ function getNickname() {
     return (localStorage.getItem(STORAGE.nickname) || nicknameInput.value || 'Guest').trim().slice(0, 31);
 }
 
+function shortUserId(id) {
+    return String(id || '').slice(0, 8);
+}
+
 function targetUsers(msg) {
     return msg && msg.to && Array.isArray(msg.to.users) ? msg.to.users : [];
 }
@@ -447,10 +451,11 @@ function showSystemMessage(text) {
 
 function conversationSubtitle(conversation) {
     if (conversation.type === 'global') {
-        return `${onlineUsers.size} online`;
+        const count = otherOnlineUserCount();
+        return `${count} friend${count === 1 ? '' : 's'} online`;
     }
     if (conversation.type === 'private') {
-        return onlineUsers.has(conversation.id) ? 'Online now' : 'Recent chat';
+        return `${onlineUsers.has(conversation.id) ? 'Online' : 'Offline'} • ${shortUserId(conversation.id)}`;
     }
     return `${conversation.members?.length || 0} members`;
 }
@@ -468,6 +473,9 @@ function addConversationItem(conversation) {
     item.className = 'conversation-item';
     if (conversation.id === currentConversation.id) {
         item.classList.add('conversation-item-active');
+    }
+    if (conversation.type === 'private' && onlineUsers.has(conversation.id)) {
+        item.classList.add('conversation-item-online');
     }
 
     const title = document.createElement('strong');
@@ -499,8 +507,8 @@ function renderConversationList() {
     addConversationSection(`Me: ${getNickname()} (${userId.slice(0, 8)})`);
     addConversationItem(conversations.global);
 
-    addConversationSection('Online users');
     const otherUsers = Array.from(onlineUsers.values()).filter((user) => user.id !== userId);
+    addConversationSection(`Online friends (${otherUsers.length})`);
     if (otherUsers.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'conversation-empty';
@@ -837,7 +845,7 @@ function handleIncoming(event) {
         const msg = JSON.parse(event.data);
 
         if (msg.type === 'ping') {
-            sendRaw({ type: 'pong', from: userId });
+            sendRaw({ type: 'pong', from: userId, timestamp: Math.floor(Date.now() / 1000) });
             return;
         }
 

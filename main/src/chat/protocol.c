@@ -76,6 +76,25 @@ static bool message_visible_to_user(cJSON *message, const char *user_id)
     return json_array_contains_string(cJSON_GetObjectItem(to, "users"), user_id);
 }
 
+static bool json_safe_message_id(cJSON *item, bool allow_zero, uint64_t *id_out)
+{
+    if (!cJSON_IsNumber(item) ||
+        item->valuedouble < (allow_zero ? 0 : 1) ||
+        item->valuedouble > (double)CHAT_MESSAGE_MAX_SAFE_ID) {
+        return false;
+    }
+
+    uint64_t parsed = (uint64_t)item->valuedouble;
+    if ((double)parsed != item->valuedouble) {
+        return false;
+    }
+
+    if (id_out != NULL) {
+        *id_out = parsed;
+    }
+    return true;
+}
+
 static esp_err_t relay_payload_to_targets(app_context_t *ctx, cJSON *to, const char *payload)
 {
     if (ctx == NULL || !cJSON_IsObject(to) || payload == NULL) {
@@ -98,7 +117,7 @@ static esp_err_t relay_payload_to_targets(app_context_t *ctx, cJSON *to, const c
     }
 
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (!ctx->client_slots[i].active || ctx->client_slots[i].user_id[0] == '\0') {
+        if (!ctx->client_slots[i].active || !ctx->client_slots[i].joined || ctx->client_slots[i].user_id[0] == '\0') {
             continue;
         }
         if (!send_all && !json_array_contains_string(users, ctx->client_slots[i].user_id)) {
@@ -113,6 +132,7 @@ static esp_err_t relay_payload_to_targets(app_context_t *ctx, cJSON *to, const c
     xSemaphoreGive(ctx->client_mutex);
 
     esp_err_t first_error = ESP_OK;
+    bool closed_client = false;
     for (int i = 0; i < fd_count; i++) {
         esp_err_t ret = chat_ws_send_text(ctx, fds[i], payload);
         if (ret != ESP_OK && first_error == ESP_OK) {
@@ -120,27 +140,53 @@ static esp_err_t relay_payload_to_targets(app_context_t *ctx, cJSON *to, const c
         }
         if (ret != ESP_OK) {
             chat_ws_close_client(ctx, fds[i]);
+            closed_client = true;
         }
     }
 
+    if (closed_client) {
+        chat_sessions_broadcast_online_users(ctx);
+    }
+
     return first_error;
+}
+
+static esp_err_t require_joined_identity(app_context_t *ctx, int fd, cJSON *root)
+{
+    if (!chat_sessions_is_joined(ctx, fd)) {
+        return chat_ws_send_error(ctx, fd, "not_joined", "Join before sending chat messages");
+    }
+
+    cJSON *from = cJSON_GetObjectItem(root, "from");
+    if (!json_string_in_range(from, MAX_USER_ID_LEN, false) ||
+        !chat_sessions_identity_matches(ctx, fd, from->valuestring)) {
+        return chat_ws_send_error(ctx, fd, "bad_identity", "Message sender does not match the joined user");
+    }
+
+    chat_sessions_update_time_sample(ctx, fd, root);
+    return ESP_OK;
 }
 
 static esp_err_t handle_join_message(app_context_t *ctx, int fd, cJSON *root)
 {
     cJSON *from = cJSON_GetObjectItem(root, "from");
     cJSON *name = cJSON_GetObjectItem(root, "name");
+    uint64_t since_id = 0;
 
     if (!json_string_in_range(from, MAX_USER_ID_LEN, false) ||
         !json_string_in_range(name, MAX_NAME_LEN, false)) {
         return chat_ws_send_error(ctx, fd, "bad_join", "Join requires valid from and name fields");
+    }
+    if (!chat_history_parse_since_id(root, &since_id)) {
+        return chat_ws_send_error(ctx, fd, "bad_since_id", "since_id must be a safe non-negative integer");
     }
 
     if (!chat_sessions_update_identity(ctx, fd, from->valuestring, name->valuestring)) {
         return chat_ws_send_error(ctx, fd, "not_registered", "WebSocket client slot was not found");
     }
 
-    chat_history_send_to_client(ctx, fd, chat_history_json_since_id(root));
+    chat_sessions_update_time_sample(ctx, fd, root);
+    chat_history_send_to_client(ctx, fd, since_id);
     chat_history_send_info_to_client(ctx, fd);
     chat_sessions_send_online_users_to_client(ctx, fd);
     chat_sessions_broadcast_online_users(ctx);
@@ -157,8 +203,6 @@ static esp_err_t handle_chat_message(app_context_t *ctx, int fd, cJSON *root)
         !json_string_in_range(name, MAX_NAME_LEN, false)) {
         return chat_ws_send_error(ctx, fd, "bad_message", "Message requires valid from and name fields");
     }
-
-    chat_sessions_update_identity(ctx, fd, from->valuestring, name->valuestring);
 
     if (strcmp(type->valuestring, "text") == 0) {
         cJSON *data = cJSON_GetObjectItem(root, "data");
@@ -205,13 +249,13 @@ static bool validate_history_message_object(cJSON *message)
     }
 
     cJSON *id = cJSON_GetObjectItem(message, "id");
+    cJSON *timestamp = cJSON_GetObjectItem(message, "timestamp");
     cJSON *type = cJSON_GetObjectItem(message, "type");
     cJSON *from = cJSON_GetObjectItem(message, "from");
     cJSON *name = cJSON_GetObjectItem(message, "name");
 
-    if (!cJSON_IsNumber(id) ||
-        id->valuedouble <= 0 ||
-        id->valuedouble > (double)CHAT_MESSAGE_MAX_SAFE_ID ||
+    if (!json_safe_message_id(id, false, NULL) ||
+        !cJSON_IsNumber(timestamp) ||
         !json_string_in_range(type, 24, false) ||
         !json_string_in_range(from, MAX_USER_ID_LEN, false) ||
         !json_string_in_range(name, MAX_NAME_LEN, false) ||
@@ -261,15 +305,13 @@ static esp_err_t handle_history_request_message(app_context_t *ctx, int fd, cJSO
     if (!json_string_in_range(from, MAX_USER_ID_LEN, false) ||
         !json_string_in_range(name, MAX_NAME_LEN, false) ||
         !json_string_in_range(request_id, MAX_REQUEST_ID_LEN, false) ||
-        !cJSON_IsNumber(restore_before) ||
-        restore_before->valuedouble <= 1 ||
-        restore_before->valuedouble > (double)CHAT_MESSAGE_MAX_SAFE_ID) {
+        !json_safe_message_id(restore_before, false, NULL) ||
+        restore_before->valuedouble <= 1) {
         return chat_ws_send_error(ctx, fd, "bad_history_request", "History request is invalid");
     }
 
-    chat_sessions_update_identity(ctx, fd, from->valuestring, name->valuestring);
-
-    uint64_t requested_before = (uint64_t)restore_before->valuedouble;
+    uint64_t requested_before = 0;
+    json_safe_message_id(restore_before, false, &requested_before);
     uint64_t allowed_before = chat_history_current_restore_before_id(ctx);
     if (requested_before > allowed_before) {
         requested_before = allowed_before;
@@ -318,15 +360,15 @@ static esp_err_t handle_history_response_message(app_context_t *ctx, int fd, cJS
     }
 
     cJSON *id = cJSON_GetObjectItem(message, "id");
+    uint64_t response_id = 0;
+    json_safe_message_id(id, false, &response_id);
     uint64_t restore_before_id = chat_history_current_restore_before_id(ctx);
-    if (id->valuedouble >= (double)restore_before_id) {
+    if (response_id >= restore_before_id) {
         return chat_ws_send_error(ctx, fd, "bad_history_response", "History response is not older than the server boundary");
     }
     if (!history_response_targets_match_message(root, message)) {
         return chat_ws_send_error(ctx, fd, "bad_history_response", "History response is not visible to the requested user");
     }
-
-    chat_sessions_update_identity(ctx, fd, from->valuestring, name->valuestring);
 
     char *payload = cJSON_PrintUnformatted(root);
     if (payload == NULL) {
@@ -351,11 +393,19 @@ esp_err_t chat_protocol_handle_json(app_context_t *ctx, int fd, cJSON *root)
 
     if (strcmp(type->valuestring, "pong") == 0) {
         chat_sessions_mark_alive(ctx, fd);
+        if (chat_sessions_is_joined(ctx, fd)) {
+            chat_sessions_update_time_sample(ctx, fd, root);
+        }
         return ESP_OK;
     }
 
     if (strcmp(type->valuestring, "join") == 0) {
         return handle_join_message(ctx, fd, root);
+    }
+
+    esp_err_t identity_ret = require_joined_identity(ctx, fd, root);
+    if (identity_ret != ESP_OK) {
+        return identity_ret;
     }
 
     if (strcmp(type->valuestring, "getOnlineUser") == 0) {
