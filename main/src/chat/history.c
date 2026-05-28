@@ -142,26 +142,33 @@ void chat_history_send_info_to_client(app_context_t *ctx, int fd)
     free(payload);
 }
 
-void chat_history_broadcast_info(app_context_t *ctx)
+bool chat_history_broadcast_info(app_context_t *ctx)
 {
     char *payload = chat_history_build_info_payload(ctx);
     if (payload == NULL) {
         ESP_LOGW(TAG, "Failed to build history boundary payload");
-        return;
+        return false;
     }
 
-    chat_ws_broadcast(ctx, payload);
+    bool closed_client = chat_ws_broadcast(ctx, payload);
     free(payload);
+    return closed_client;
 }
 
 void chat_history_send_to_client(app_context_t *ctx, int fd, uint64_t since_id)
 {
-    char *payloads[MAX_MESSAGES] = { 0 };
+    char **payloads = calloc(MAX_MESSAGES, sizeof(char *));
     bool allocation_failed = false;
     bool send_failed = false;
     int count = 0;
 
+    if (payloads == NULL) {
+        chat_ws_send_error(ctx, fd, "server_busy", "Message history is temporarily unavailable");
+        return;
+    }
+
     if (ctx == NULL || xSemaphoreTake(ctx->message_mutex, portMAX_DELAY) != pdTRUE) {
+        free(payloads);
         chat_ws_send_error(ctx, fd, "server_busy", "Message history is temporarily unavailable");
         return;
     }
@@ -210,6 +217,7 @@ void chat_history_send_to_client(app_context_t *ctx, int fd, uint64_t since_id)
     }
 
     ESP_LOGI(TAG, "Sent %d history messages to fd=%d since_id=%" PRIu64, sent, fd, since_id);
+    free(payloads);
 }
 
 esp_err_t chat_history_finalize_and_store_message(app_context_t *ctx, cJSON *root, char **payload_out)
