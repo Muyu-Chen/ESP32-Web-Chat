@@ -17,3 +17,4 @@ char *chat_sessions_build_online_users_payload(app_context_t *ctx);
 void chat_sessions_broadcast_online_users(app_context_t *ctx);
 void chat_sessions_send_online_users_to_client(app_context_t *ctx, int fd);
 void chat_sessions_start_heartbeat(app_context_t *ctx);
+bool chat_sessions_mark_closing(app_context_t *ctx, int fd);

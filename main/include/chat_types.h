@@ -8,6 +8,7 @@
 typedef struct {
     int fd;
     bool active;
+    bool closing;
     bool joined;
     bool is_alive;
     bool time_offset_valid;

@@ -20,12 +20,30 @@ static void clear_slot_identity(client_slot_t *slot)
 
     slot->fd = -1;
     slot->active = false;
+    slot->closing = false;
     slot->joined = false;
     slot->is_alive = false;
     slot->time_offset_valid = false;
     slot->time_offset_s = 0;
     slot->user_id[0] = '\0';
     slot->name[0] = '\0';
+}
+
+static bool mark_slot_closing(client_slot_t *slot)
+{
+    if (slot == NULL || !slot->active) {
+        return false;
+    }
+
+    bool was_joined = slot->joined;
+    slot->closing = true;
+    slot->joined = false;
+    slot->is_alive = false;
+    slot->time_offset_valid = false;
+    slot->time_offset_s = 0;
+    slot->user_id[0] = '\0';
+    slot->name[0] = '\0';
+    return was_joined;
 }
 
 bool chat_sessions_update_identity(app_context_t *ctx, int fd, const char *user_id, const char *name)
@@ -230,6 +248,24 @@ bool chat_sessions_mark_alive(app_context_t *ctx, int fd)
 
     xSemaphoreGive(ctx->client_mutex);
     return marked;
+}
+
+bool chat_sessions_mark_closing(app_context_t *ctx, int fd)
+{
+    bool was_joined = false;
+
+    if (ctx == NULL || xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (ctx->client_slots[i].active && ctx->client_slots[i].fd == fd) {
+            was_joined = mark_slot_closing(&ctx->client_slots[i]) || was_joined;
+        }
+    }
+
+    xSemaphoreGive(ctx->client_mutex);
+    return was_joined;
 }
 
 bool chat_sessions_remove_by_fd(app_context_t *ctx, int fd)
