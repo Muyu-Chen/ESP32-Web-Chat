@@ -129,6 +129,7 @@ bool chat_sessions_update_identity(app_context_t *ctx, int fd, const char *user_
 bool chat_sessions_ensure_slot(app_context_t *ctx, int fd)
 {
     bool ready = false;
+    bool fd_known = false;
 
     if (ctx == NULL || xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) != pdTRUE) {
         return false;
@@ -136,17 +137,22 @@ bool chat_sessions_ensure_slot(app_context_t *ctx, int fd)
 
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (ctx->client_slots[i].active && ctx->client_slots[i].fd == fd) {
+            fd_known = true;
+            if (ctx->client_slots[i].closing) {
+                break;
+            }
             ctx->client_slots[i].is_alive = true;
             ready = true;
             break;
         }
     }
 
-    if (!ready) {
+    if (!ready && !fd_known) {
         for (int i = 0; i < MAX_CLIENTS; i++) {
             if (!ctx->client_slots[i].active) {
                 ctx->client_slots[i].fd = fd;
                 ctx->client_slots[i].active = true;
+                ctx->client_slots[i].closing = false;
                 ctx->client_slots[i].joined = false;
                 ctx->client_slots[i].is_alive = true;
                 ctx->client_slots[i].time_offset_valid = false;
@@ -173,7 +179,7 @@ bool chat_sessions_is_joined(app_context_t *ctx, int fd)
     }
 
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (ctx->client_slots[i].active && ctx->client_slots[i].fd == fd) {
+        if (ctx->client_slots[i].active && !ctx->client_slots[i].closing && ctx->client_slots[i].fd == fd) {
             joined = ctx->client_slots[i].joined && ctx->client_slots[i].user_id[0] != '\0';
             break;
         }
