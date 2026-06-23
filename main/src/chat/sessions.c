@@ -57,33 +57,30 @@ bool chat_sessions_update_identity(app_context_t *ctx, int fd, const char *user_
     }
 
     int free_slot = -1;
-    int same_user_slot = -1;
     int fd_slot = -1;
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (ctx->client_slots[i].active && ctx->client_slots[i].fd == fd) {
+        if (ctx->client_slots[i].active && !ctx->client_slots[i].closing && ctx->client_slots[i].fd == fd) {
             fd_slot = i;
             continue;
-        }
-        if (ctx->client_slots[i].active && user_id != NULL && ctx->client_slots[i].user_id[0] != '\0' &&
-            strcmp(ctx->client_slots[i].user_id, user_id) == 0) {
-            same_user_slot = i;
         }
         if (!ctx->client_slots[i].active && free_slot < 0) {
             free_slot = i;
         }
     }
 
-    int target = fd_slot >= 0 ? fd_slot : (same_user_slot >= 0 ? same_user_slot : free_slot);
+    int target = fd_slot >= 0 ? fd_slot : free_slot;
     if (target >= 0) {
-        int old_target_fd = ctx->client_slots[target].fd;
-        bool identity_changed = old_target_fd != fd ||
+        bool identity_changed = ctx->client_slots[target].fd != fd ||
             ctx->client_slots[target].user_id[0] == '\0' ||
             user_id == NULL ||
             strcmp(ctx->client_slots[target].user_id, user_id) != 0;
         ctx->client_slots[target].fd = fd;
         ctx->client_slots[target].active = true;
+        ctx->client_slots[target].closing = false;
         ctx->client_slots[target].joined = true;
         ctx->client_slots[target].is_alive = true;
+        ctx->client_slots[target].registered_at_s = device_uptime_s();
+        ctx->client_slots[target].last_ping_s = ctx->client_slots[target].registered_at_s;
         if (identity_changed) {
             ctx->client_slots[target].time_offset_valid = false;
             ctx->client_slots[target].time_offset_s = 0;
@@ -94,10 +91,6 @@ bool chat_sessions_update_identity(app_context_t *ctx, int fd, const char *user_
 
         if (fd_slot < 0) {
             ESP_LOGW(TAG, "Recovered missing WebSocket client slot for fd=%d", fd);
-        }
-        if (fd_slot < 0 && same_user_slot >= 0 && target == same_user_slot &&
-            old_target_fd >= 0 && old_target_fd != fd && stale_count < MAX_CLIENTS) {
-            stale_fds[stale_count++] = old_target_fd;
         }
     }
 
@@ -110,7 +103,7 @@ bool chat_sessions_update_identity(app_context_t *ctx, int fd, const char *user_
                 if (ctx->client_slots[i].fd >= 0 && ctx->client_slots[i].fd != fd && stale_count < MAX_CLIENTS) {
                     stale_fds[stale_count++] = ctx->client_slots[i].fd;
                 }
-                clear_slot_identity(&ctx->client_slots[i]);
+                mark_slot_closing(&ctx->client_slots[i]);
             }
         }
     }
