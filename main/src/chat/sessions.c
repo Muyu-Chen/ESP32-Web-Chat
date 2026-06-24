@@ -111,9 +111,13 @@ bool chat_sessions_update_identity(app_context_t *ctx, int fd, const char *user_
     xSemaphoreGive(ctx->client_mutex);
 
     for (int i = 0; i < stale_count; i++) {
-        if (ctx->server != NULL) {
-            httpd_sess_trigger_close(ctx->server, stale_fds[i]);
+        esp_err_t notify_ret = chat_ws_send_error(ctx, stale_fds[i], "session_replaced",
+                                                  "This user connected from another browser session");
+        if (notify_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to notify replaced session fd=%d: %s",
+                     stale_fds[i], esp_err_to_name(notify_ret));
         }
+        chat_ws_close_client(ctx, stale_fds[i]);
     }
 
     return updated;
