@@ -274,6 +274,7 @@ bool chat_sessions_mark_closing(app_context_t *ctx, int fd)
 bool chat_sessions_remove_by_fd(app_context_t *ctx, int fd)
 {
     bool removed = false;
+    int removed_count = 0;
 
     if (ctx == NULL || xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) != pdTRUE) {
         return false;
@@ -283,11 +284,14 @@ bool chat_sessions_remove_by_fd(app_context_t *ctx, int fd)
         if (ctx->client_slots[i].active && ctx->client_slots[i].fd == fd) {
             clear_slot_identity(&ctx->client_slots[i]);
             removed = true;
-            break;
+            removed_count++;
         }
     }
 
     xSemaphoreGive(ctx->client_mutex);
+    if (removed_count > 1) {
+        ESP_LOGW(TAG, "Removed %d duplicate slots for fd=%d", removed_count, fd);
+    }
     return removed;
 }
 
