@@ -25,6 +25,8 @@ static void clear_slot_identity(client_slot_t *slot)
     slot->is_alive = false;
     slot->time_offset_valid = false;
     slot->time_offset_s = 0;
+    slot->registered_at_s = 0;
+    slot->last_ping_s = 0;
     slot->user_id[0] = '\0';
     slot->name[0] = '\0';
 }
@@ -154,6 +156,8 @@ bool chat_sessions_ensure_slot(app_context_t *ctx, int fd)
                 ctx->client_slots[i].is_alive = true;
                 ctx->client_slots[i].time_offset_valid = false;
                 ctx->client_slots[i].time_offset_s = 0;
+                ctx->client_slots[i].registered_at_s = device_uptime_s();
+                ctx->client_slots[i].last_ping_s = ctx->client_slots[i].registered_at_s;
                 ctx->client_slots[i].user_id[0] = '\0';
                 copy_bounded(ctx->client_slots[i].name, sizeof(ctx->client_slots[i].name), "New User");
                 ready = true;
@@ -377,9 +381,10 @@ static void heartbeat_task(void *pvParameters)
     const char *ping_payload = "{\"type\":\"ping\"}";
 
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_INTERVAL_S * 1000));
+        vTaskDelay(pdMS_TO_TICKS(SESSION_SWEEP_INTERVAL_MS));
 
         bool changed = false;
+        int64_t now_s = device_uptime_s();
         int ping_fds[MAX_CLIENTS];
         int ping_count = 0;
         int close_fds[MAX_CLIENTS];
@@ -389,7 +394,19 @@ static void heartbeat_task(void *pvParameters)
         }
 
         for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (!ctx->client_slots[i].active) {
+            if (!ctx->client_slots[i].active || ctx->client_slots[i].closing) {
+                continue;
+            }
+
+            if (!ctx->client_slots[i].joined) {
+                if (now_s - ctx->client_slots[i].registered_at_s < WS_JOIN_TIMEOUT_S) {
+                    continue;
+                }
+                ESP_LOGW(TAG, "Client fd=%d did not join; closing", ctx->client_slots[i].fd);
+                if (close_count < MAX_CLIENTS) {
+                    close_fds[close_count++] = ctx->client_slots[i].fd;
+                }
+                mark_slot_closing(&ctx->client_slots[i]);
                 continue;
             }
 

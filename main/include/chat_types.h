@@ -13,6 +13,8 @@ typedef struct {
     bool is_alive;
     bool time_offset_valid;
     int64_t time_offset_s;
+    int64_t registered_at_s;
+    int64_t last_ping_s;
     char user_id[MAX_USER_ID_LEN + 1];
     char name[MAX_NAME_LEN + 1];
 } client_slot_t;

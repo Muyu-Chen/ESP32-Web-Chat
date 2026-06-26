@@ -14,6 +14,8 @@
 #define MAX_WS_PAYLOAD_BYTES       CONFIG_CHAT_MAX_WS_PAYLOAD_BYTES
 
 #define TIME_SYNC_TOLERANCE_S      120
+#define WS_JOIN_TIMEOUT_S          10
+#define SESSION_SWEEP_INTERVAL_MS  1000
 #define MAX_USER_ID_LEN            63
 #define MAX_NAME_LEN               31
 #define MAX_REQUEST_ID_LEN         63
