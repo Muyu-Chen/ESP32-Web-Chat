@@ -246,7 +246,8 @@ bool chat_sessions_mark_alive(app_context_t *ctx, int fd)
     }
 
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (ctx->client_slots[i].active && ctx->client_slots[i].fd == fd) {
+        if (ctx->client_slots[i].active && !ctx->client_slots[i].closing &&
+            ctx->client_slots[i].joined && ctx->client_slots[i].fd == fd) {
             ctx->client_slots[i].is_alive = true;
             marked = true;
             break;
@@ -411,16 +412,24 @@ static void heartbeat_task(void *pvParameters)
             }
 
             if (!ctx->client_slots[i].is_alive) {
+                if (now_s - ctx->client_slots[i].last_ping_s < HEARTBEAT_INTERVAL_S) {
+                    continue;
+                }
                 ESP_LOGW(TAG, "Client fd=%d missed heartbeat; closing", ctx->client_slots[i].fd);
                 if (close_count < MAX_CLIENTS) {
                     close_fds[close_count++] = ctx->client_slots[i].fd;
                 }
-                clear_slot_identity(&ctx->client_slots[i]);
+                mark_slot_closing(&ctx->client_slots[i]);
                 changed = true;
                 continue;
             }
 
+            if (now_s - ctx->client_slots[i].last_ping_s < HEARTBEAT_INTERVAL_S) {
+                continue;
+            }
+
             ctx->client_slots[i].is_alive = false;
+            ctx->client_slots[i].last_ping_s = now_s;
             if (ping_count < MAX_CLIENTS) {
                 ping_fds[ping_count++] = ctx->client_slots[i].fd;
             }
