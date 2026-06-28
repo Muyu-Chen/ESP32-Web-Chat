@@ -460,5 +460,8 @@ static void heartbeat_task(void *pvParameters)
 
 void chat_sessions_start_heartbeat(app_context_t *ctx)
 {
-    xTaskCreate(heartbeat_task, "heartbeat_task", 4096, ctx, 5, NULL);
+    BaseType_t created = xTaskCreate(heartbeat_task, "heartbeat_task", 4096, ctx, 5, NULL);
+    if (created != pdPASS) {
+        ESP_LOGE(TAG, "Failed to start heartbeat task");
+    }
 }
