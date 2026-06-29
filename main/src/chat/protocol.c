@@ -95,6 +95,13 @@ static bool json_safe_message_id(cJSON *item, bool allow_zero, uint64_t *id_out)
     return true;
 }
 
+static esp_err_t send_error_and_close(app_context_t *ctx, int fd, const char *code, const char *message)
+{
+    esp_err_t ret = chat_ws_send_error(ctx, fd, code, message);
+    chat_ws_close_client(ctx, fd);
+    return ret;
+}
+
 static esp_err_t relay_payload_to_targets(app_context_t *ctx, cJSON *to, const char *payload)
 {
     if (ctx == NULL || !cJSON_IsObject(to) || payload == NULL) {
@@ -153,14 +160,14 @@ static esp_err_t relay_payload_to_targets(app_context_t *ctx, cJSON *to, const c
 
 static esp_err_t require_joined_identity(app_context_t *ctx, int fd, cJSON *root)
 {
-    if (!chat_sessions_is_joined(ctx, fd)) {
-        return chat_ws_send_error(ctx, fd, "not_joined", "Join before sending chat messages");
+    cJSON *from = cJSON_GetObjectItemCaseSensitive(root, "from");
+    bool valid_from = json_string_in_range(from, MAX_USER_ID_LEN, false);
+    chat_identity_status_t identity = chat_sessions_check_identity(ctx, fd, valid_from ? from->valuestring : NULL);
+    if (identity == CHAT_IDENTITY_NOT_JOINED) {
+        return send_error_and_close(ctx, fd, "not_joined", "Join before sending this message");
     }
-
-    cJSON *from = cJSON_GetObjectItem(root, "from");
-    if (!json_string_in_range(from, MAX_USER_ID_LEN, false) ||
-        !chat_sessions_identity_matches(ctx, fd, from->valuestring)) {
-        return chat_ws_send_error(ctx, fd, "bad_identity", "Message sender does not match the joined user");
+    if (!valid_from || identity != CHAT_IDENTITY_OK) {
+        return send_error_and_close(ctx, fd, "bad_identity", "Message sender does not match the joined user");
     }
 
     chat_sessions_update_time_sample(ctx, fd, root);

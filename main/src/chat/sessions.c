@@ -190,25 +190,30 @@ bool chat_sessions_is_joined(app_context_t *ctx, int fd)
     return joined;
 }
 
-bool chat_sessions_identity_matches(app_context_t *ctx, int fd, const char *user_id)
+chat_identity_status_t chat_sessions_check_identity(app_context_t *ctx, int fd, const char *user_id)
 {
-    bool matches = false;
+    chat_identity_status_t status = CHAT_IDENTITY_NOT_JOINED;
 
-    if (ctx == NULL || user_id == NULL || xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) != pdTRUE) {
-        return false;
+    if (ctx == NULL || xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) != pdTRUE) {
+        return status;
     }
 
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (ctx->client_slots[i].active && ctx->client_slots[i].fd == fd) {
-            matches = ctx->client_slots[i].joined &&
-                ctx->client_slots[i].user_id[0] != '\0' &&
-                strcmp(ctx->client_slots[i].user_id, user_id) == 0;
+        client_slot_t *slot = &ctx->client_slots[i];
+        if (!slot->active || slot->closing || slot->fd != fd) {
+            continue;
+        }
+        if (!slot->joined || slot->user_id[0] == '\0') {
             break;
         }
+        status = user_id != NULL && strcmp(slot->user_id, user_id) == 0
+            ? CHAT_IDENTITY_OK
+            : CHAT_IDENTITY_MISMATCH;
+        break;
     }
 
     xSemaphoreGive(ctx->client_mutex);
-    return matches;
+    return status;
 }
 
 void chat_sessions_update_time_sample(app_context_t *ctx, int fd, const cJSON *root)
