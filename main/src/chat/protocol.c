@@ -182,14 +182,17 @@ static esp_err_t handle_join_message(app_context_t *ctx, int fd, cJSON *root)
 
     if (!json_string_in_range(from, MAX_USER_ID_LEN, false) ||
         !json_string_in_range(name, MAX_NAME_LEN, false)) {
-        return chat_ws_send_error(ctx, fd, "bad_join", "Join requires valid from and name fields");
+        return send_error_and_close(ctx, fd, "bad_join", "Join requires valid from and name fields");
     }
     if (!chat_history_parse_since_id(root, &since_id)) {
-        return chat_ws_send_error(ctx, fd, "bad_since_id", "since_id must be a safe non-negative integer");
+        return send_error_and_close(ctx, fd, "bad_since_id", "since_id must be a safe non-negative integer");
+    }
+    if (chat_sessions_check_identity(ctx, fd, from->valuestring) == CHAT_IDENTITY_MISMATCH) {
+        return send_error_and_close(ctx, fd, "bad_identity", "Join identity cannot change on an open connection");
     }
 
     if (!chat_sessions_update_identity(ctx, fd, from->valuestring, name->valuestring)) {
-        return chat_ws_send_error(ctx, fd, "not_registered", "WebSocket client slot was not found");
+        return send_error_and_close(ctx, fd, "not_registered", "WebSocket client slot was not found");
     }
 
     chat_sessions_update_time_sample(ctx, fd, root);
