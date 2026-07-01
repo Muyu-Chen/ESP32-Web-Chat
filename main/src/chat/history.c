@@ -130,16 +130,17 @@ char *chat_history_build_info_payload(app_context_t *ctx)
     return payload;
 }
 
-void chat_history_send_info_to_client(app_context_t *ctx, int fd)
+esp_err_t chat_history_send_info_to_client(app_context_t *ctx, int fd)
 {
     char *payload = chat_history_build_info_payload(ctx);
     if (payload == NULL) {
-        chat_ws_send_error(ctx, fd, "server_busy", "History boundary is temporarily unavailable");
-        return;
+        esp_err_t ret = chat_ws_send_error(ctx, fd, "server_busy", "History boundary is temporarily unavailable");
+        return ret == ESP_OK ? ESP_ERR_NO_MEM : ret;
     }
 
-    chat_ws_send_text(ctx, fd, payload);
+    esp_err_t ret = chat_ws_send_text(ctx, fd, payload);
     free(payload);
+    return ret;
 }
 
 bool chat_history_broadcast_info(app_context_t *ctx)
@@ -155,22 +156,21 @@ bool chat_history_broadcast_info(app_context_t *ctx)
     return closed_client;
 }
 
-void chat_history_send_to_client(app_context_t *ctx, int fd, uint64_t since_id)
+esp_err_t chat_history_send_to_client(app_context_t *ctx, int fd, uint64_t since_id)
 {
     char **payloads = calloc(MAX_MESSAGES, sizeof(char *));
     bool allocation_failed = false;
-    bool send_failed = false;
     int count = 0;
 
     if (payloads == NULL) {
-        chat_ws_send_error(ctx, fd, "server_busy", "Message history is temporarily unavailable");
-        return;
+        esp_err_t ret = chat_ws_send_error(ctx, fd, "server_busy", "Message history is temporarily unavailable");
+        return ret == ESP_OK ? ESP_ERR_NO_MEM : ret;
     }
 
     if (ctx == NULL || xSemaphoreTake(ctx->message_mutex, portMAX_DELAY) != pdTRUE) {
         free(payloads);
-        chat_ws_send_error(ctx, fd, "server_busy", "Message history is temporarily unavailable");
-        return;
+        esp_err_t ret = chat_ws_send_error(ctx, fd, "server_busy", "Message history is temporarily unavailable");
+        return ret == ESP_OK ? ESP_ERR_TIMEOUT : ret;
     }
 
     int current_pos = ctx->message_buffer_head;
@@ -192,7 +192,17 @@ void chat_history_send_to_client(app_context_t *ctx, int fd, uint64_t since_id)
 
     xSemaphoreGive(ctx->message_mutex);
 
+    if (allocation_failed) {
+        for (int i = 0; i < count; i++) {
+            free(payloads[i]);
+        }
+        free(payloads);
+        esp_err_t ret = chat_ws_send_error(ctx, fd, "server_busy", "Message history is temporarily unavailable");
+        return ret == ESP_OK ? ESP_ERR_NO_MEM : ret;
+    }
+
     int sent = 0;
+    esp_err_t result = ESP_OK;
     for (int i = 0; i < count; i++) {
         esp_err_t ret = chat_ws_send_text(ctx, fd, payloads[i]);
         free(payloads[i]);
@@ -204,7 +214,7 @@ void chat_history_send_to_client(app_context_t *ctx, int fd, uint64_t since_id)
 
         ESP_LOGW(TAG, "History send failed for fd=%d: %s", fd, esp_err_to_name(ret));
         chat_ws_close_client(ctx, fd);
-        send_failed = true;
+        result = ret;
         break;
     }
 
@@ -212,12 +222,9 @@ void chat_history_send_to_client(app_context_t *ctx, int fd, uint64_t since_id)
         free(payloads[i]);
     }
 
-    if (allocation_failed && !send_failed) {
-        chat_ws_send_error(ctx, fd, "server_busy", "Message history is temporarily unavailable");
-    }
-
     ESP_LOGI(TAG, "Sent %d history messages to fd=%d since_id=%" PRIu64, sent, fd, since_id);
     free(payloads);
+    return result;
 }
 
 esp_err_t chat_history_finalize_and_store_message(app_context_t *ctx, cJSON *root, char **payload_out)
