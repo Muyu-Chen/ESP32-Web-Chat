@@ -373,12 +373,13 @@ void chat_sessions_send_online_users_to_client(app_context_t *ctx, int fd)
 {
     char *payload = chat_sessions_build_online_users_payload(ctx);
     if (payload == NULL) {
-        chat_ws_send_error(ctx, fd, "server_busy", "Unable to build online user list");
-        return;
+        esp_err_t ret = chat_ws_send_error(ctx, fd, "server_busy", "Unable to build online user list");
+        return ret == ESP_OK ? ESP_ERR_NO_MEM : ret;
     }
 
-    chat_ws_send_text(ctx, fd, payload);
+    esp_err_t ret = chat_ws_send_text(ctx, fd, payload);
     free(payload);
+    return ret;
 }
 
 static void heartbeat_task(void *pvParameters)

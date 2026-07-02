@@ -196,9 +196,17 @@ static esp_err_t handle_join_message(app_context_t *ctx, int fd, cJSON *root)
     }
 
     chat_sessions_update_time_sample(ctx, fd, root);
-    chat_history_send_to_client(ctx, fd, since_id);
-    chat_history_send_info_to_client(ctx, fd);
-    chat_sessions_send_online_users_to_client(ctx, fd);
+    esp_err_t sync_ret = chat_history_send_to_client(ctx, fd, since_id);
+    if (sync_ret == ESP_OK) {
+        sync_ret = chat_history_send_info_to_client(ctx, fd);
+    }
+    if (sync_ret == ESP_OK) {
+        sync_ret = chat_sessions_send_online_users_to_client(ctx, fd);
+    }
+    if (sync_ret != ESP_OK) {
+        chat_ws_close_client(ctx, fd);
+        return sync_ret;
+    }
     chat_sessions_broadcast_online_users(ctx);
     return ESP_OK;
 }
