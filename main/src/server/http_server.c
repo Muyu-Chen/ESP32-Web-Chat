@@ -279,7 +279,9 @@ httpd_handle_t chat_http_start_server(app_context_t *ctx)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.max_uri_handlers = 12;
-    config.lru_purge_enable = true;
+    config.stack_size = 6144;
+    config.send_wait_timeout = 1;
+    config.lru_purge_enable = false;
     config.close_fn = chat_ws_session_close_handler;
 
     int desired_sockets = MAX_CLIENTS + HTTP_STATIC_SOCKET_MARGIN;
@@ -301,6 +303,10 @@ httpd_handle_t chat_http_start_server(app_context_t *ctx)
     ESP_LOGI(TAG, "Starting webserver with max_open_sockets=%d", config.max_open_sockets);
 
     if (httpd_start(&local_server, &config) == ESP_OK) {
+        if (ctx != NULL) {
+            ctx->server = local_server;
+        }
+
         httpd_uri_t root = { .uri = "/", .method = HTTP_GET, .handler = root_get_handler, .user_ctx = ctx };
         httpd_register_uri_handler(local_server, &root);
 
@@ -326,7 +332,7 @@ httpd_handle_t chat_http_start_server(app_context_t *ctx)
         httpd_register_uri_handler(local_server, &catch_all);
     }
 
-    if (ctx != NULL) {
+    if (ctx != NULL && local_server == NULL) {
         ctx->server = local_server;
     }
     return local_server;
