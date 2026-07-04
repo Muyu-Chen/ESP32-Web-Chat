@@ -32,19 +32,18 @@ esp_err_t chat_ws_send_text(app_context_t *ctx, int fd, const char *payload)
     return httpd_ws_send_frame_async(ctx->server, fd, &ws_pkt);
 }
 
-void chat_ws_broadcast(app_context_t *ctx, const char *payload)
+bool chat_ws_broadcast(app_context_t *ctx, const char *payload)
 {
-    static bool presence_update_in_progress = false;
     int fds[MAX_CLIENTS];
     int fd_count = 0;
     bool closed_client = false;
 
     if (ctx == NULL || payload == NULL || xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) != pdTRUE) {
-        return;
+        return false;
     }
 
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (!ctx->client_slots[i].active) {
+        if (!ctx->client_slots[i].active || ctx->client_slots[i].closing || !ctx->client_slots[i].joined) {
             continue;
         }
 
@@ -64,11 +63,7 @@ void chat_ws_broadcast(app_context_t *ctx, const char *payload)
         }
     }
 
-    if (closed_client && !presence_update_in_progress) {
-        presence_update_in_progress = true;
-        chat_sessions_broadcast_online_users(ctx);
-        presence_update_in_progress = false;
-    }
+    return closed_client;
 }
 
 esp_err_t chat_ws_send_error(app_context_t *ctx, int fd, const char *code, const char *message)
@@ -101,10 +96,46 @@ void chat_ws_close_client(app_context_t *ctx, int fd)
         return;
     }
 
-    chat_sessions_remove_by_fd(ctx, fd);
-    if (ctx->server != NULL) {
-        httpd_sess_trigger_close(ctx->server, fd);
+    chat_sessions_mark_closing(ctx, fd);
+    if (ctx->server == NULL) {
+        chat_sessions_remove_by_fd(ctx, fd);
+        return;
     }
+
+    if (ctx->httpd_task_handle != NULL && xTaskGetCurrentTaskHandle() == ctx->httpd_task_handle) {
+        if (shutdown(fd, SHUT_RDWR) != 0 && errno != ENOTCONN) {
+            ESP_LOGW(TAG, "Failed to shut down fd=%d: errno=%d", fd, errno);
+        }
+        return;
+    }
+
+    esp_err_t ret = httpd_sess_trigger_close(ctx->server, fd);
+    if (ret == ESP_ERR_NOT_FOUND) {
+        chat_sessions_remove_by_fd(ctx, fd);
+    } else if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to queue close for fd=%d: %s", fd, esp_err_to_name(ret));
+        shutdown(fd, SHUT_RDWR);
+    }
+}
+
+esp_err_t chat_ws_pre_handshake_handler(httpd_req_t *req)
+{
+    if (req == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    app_context_t *ctx = req->user_ctx ? (app_context_t *)req->user_ctx : &g_app_context;
+    int fd = httpd_req_to_sockfd(req);
+    if (ctx->httpd_task_handle == NULL) {
+        ctx->httpd_task_handle = xTaskGetCurrentTaskHandle();
+    }
+
+    if (!chat_sessions_ensure_slot(ctx, fd)) {
+        ESP_LOGW(TAG, "Max clients reached; rejecting WebSocket handshake for fd=%d", fd);
+        return ESP_ERR_NO_MEM;
+    }
+
+    return ESP_OK;
 }
 
 void chat_ws_session_close_handler(httpd_handle_t hd, int sockfd)

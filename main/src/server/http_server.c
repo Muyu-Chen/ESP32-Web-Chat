@@ -319,7 +319,16 @@ httpd_handle_t chat_http_start_server(app_context_t *ctx)
         httpd_uri_t script = { .uri = "/script.js", .method = HTTP_GET, .handler = script_get_handler, .user_ctx = ctx };
         httpd_register_uri_handler(local_server, &script);
 
-        httpd_uri_t ws = { .uri = "/ws", .method = HTTP_GET, .handler = chat_ws_handler, .is_websocket = true, .user_ctx = ctx };
+        httpd_uri_t ws = {
+            .uri = "/ws",
+            .method = HTTP_GET,
+            .handler = chat_ws_handler,
+            .is_websocket = true,
+            .user_ctx = ctx,
+#ifdef CONFIG_HTTPD_WS_PRE_HANDSHAKE_CB_SUPPORT
+            .ws_pre_handshake_cb = chat_ws_pre_handshake_handler,
+#endif
+        };
         httpd_register_uri_handler(local_server, &ws);
 
         httpd_uri_t settings_get = { .uri = "/api/settings", .method = HTTP_GET, .handler = settings_get_handler, .user_ctx = ctx };
