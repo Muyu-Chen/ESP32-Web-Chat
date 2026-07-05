@@ -444,9 +444,7 @@ static void heartbeat_task(void *pvParameters)
         xSemaphoreGive(ctx->client_mutex);
 
         for (int i = 0; i < close_count; i++) {
-            if (ctx->server != NULL) {
-                httpd_sess_trigger_close(ctx->server, close_fds[i]);
-            }
+            chat_ws_close_client(ctx, close_fds[i]);
         }
 
         for (int i = 0; i < ping_count; i++) {
