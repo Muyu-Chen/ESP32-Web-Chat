@@ -232,7 +232,8 @@ void chat_sessions_update_time_sample(app_context_t *ctx, int fd, const cJSON *r
     }
 
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (ctx->client_slots[i].active && ctx->client_slots[i].joined && ctx->client_slots[i].fd == fd) {
+        if (ctx->client_slots[i].active && !ctx->client_slots[i].closing &&
+            ctx->client_slots[i].joined && ctx->client_slots[i].fd == fd) {
             ctx->client_slots[i].time_offset_s = offset;
             ctx->client_slots[i].time_offset_valid = true;
             break;
@@ -333,7 +334,8 @@ char *chat_sessions_build_online_users_payload(app_context_t *ctx)
 
     if (xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) == pdTRUE) {
         for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (!ctx->client_slots[i].active || !ctx->client_slots[i].joined || ctx->client_slots[i].user_id[0] == '\0') {
+            if (!ctx->client_slots[i].active || ctx->client_slots[i].closing ||
+                !ctx->client_slots[i].joined || ctx->client_slots[i].user_id[0] == '\0') {
                 continue;
             }
 
