@@ -13,6 +13,7 @@
 typedef struct {
     client_slot_t client_slots[MAX_CLIENTS];
     SemaphoreHandle_t client_mutex;
+    bool presence_broadcast_pending;
 
     message_t message_buffer[MAX_MESSAGES];
     uint64_t message_id_counter;

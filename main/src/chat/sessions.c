@@ -359,19 +359,79 @@ char *chat_sessions_build_online_users_payload(app_context_t *ctx)
     return payload;
 }
 
-void chat_sessions_broadcast_online_users(app_context_t *ctx)
+static bool broadcast_online_users_now(app_context_t *ctx)
 {
-    char *payload = chat_sessions_build_online_users_payload(ctx);
-    if (payload == NULL) {
-        ESP_LOGW(TAG, "Failed to build online user list");
+    bool any_closed = false;
+
+    for (int attempt = 0; attempt <= MAX_CLIENTS; attempt++) {
+        char *payload = chat_sessions_build_online_users_payload(ctx);
+        if (payload == NULL) {
+            ESP_LOGW(TAG, "Failed to build online user list");
+            return any_closed;
+        }
+
+        bool closed_client = chat_ws_broadcast(ctx, payload);
+        free(payload);
+        any_closed = any_closed || closed_client;
+        if (!closed_client) {
+            return any_closed;
+        }
+    }
+
+    ESP_LOGW(TAG, "Online user broadcast did not converge");
+    return any_closed;
+}
+
+static void presence_broadcast_work(void *arg)
+{
+    app_context_t *ctx = (app_context_t *)arg;
+    if (ctx == NULL) {
         return;
     }
 
-    chat_ws_broadcast(ctx, payload);
-    free(payload);
+    if (xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) == pdTRUE) {
+        ctx->presence_broadcast_pending = false;
+        xSemaphoreGive(ctx->client_mutex);
+    }
+    broadcast_online_users_now(ctx);
 }
 
-void chat_sessions_send_online_users_to_client(app_context_t *ctx, int fd)
+bool chat_sessions_broadcast_online_users(app_context_t *ctx)
+{
+    if (ctx == NULL || ctx->server == NULL) {
+        return false;
+    }
+
+    if (ctx->httpd_task_handle != NULL && xTaskGetCurrentTaskHandle() != ctx->httpd_task_handle) {
+        bool should_queue = false;
+        if (xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) == pdTRUE) {
+            if (!ctx->presence_broadcast_pending) {
+                ctx->presence_broadcast_pending = true;
+                should_queue = true;
+            }
+            xSemaphoreGive(ctx->client_mutex);
+        }
+
+        if (!should_queue) {
+            return false;
+        }
+
+        esp_err_t ret = httpd_queue_work(ctx->server, presence_broadcast_work, ctx);
+        if (ret == ESP_OK) {
+            return false;
+        }
+
+        ESP_LOGW(TAG, "Failed to queue online user broadcast: %s", esp_err_to_name(ret));
+        if (xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) == pdTRUE) {
+            ctx->presence_broadcast_pending = false;
+            xSemaphoreGive(ctx->client_mutex);
+        }
+    }
+
+    return broadcast_online_users_now(ctx);
+}
+
+esp_err_t chat_sessions_send_online_users_to_client(app_context_t *ctx, int fd)
 {
     char *payload = chat_sessions_build_online_users_payload(ctx);
     if (payload == NULL) {
