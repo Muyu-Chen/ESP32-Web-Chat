@@ -139,7 +139,6 @@ static esp_err_t relay_payload_to_targets(app_context_t *ctx, cJSON *to, const c
     xSemaphoreGive(ctx->client_mutex);
 
     esp_err_t first_error = ESP_OK;
-    bool closed_client = false;
     for (int i = 0; i < fd_count; i++) {
         esp_err_t ret = chat_ws_send_text(ctx, fds[i], payload);
         if (ret != ESP_OK && first_error == ESP_OK) {
@@ -147,12 +146,7 @@ static esp_err_t relay_payload_to_targets(app_context_t *ctx, cJSON *to, const c
         }
         if (ret != ESP_OK) {
             chat_ws_close_client(ctx, fds[i]);
-            closed_client = true;
         }
-    }
-
-    if (closed_client) {
-        chat_sessions_broadcast_online_users(ctx);
     }
 
     return first_error;
@@ -255,8 +249,11 @@ static esp_err_t handle_chat_message(app_context_t *ctx, int fd, cJSON *root)
         return chat_ws_send_error(ctx, fd, "server_busy", "Unable to persist message id");
     }
 
-    chat_ws_broadcast(ctx, payload);
-    chat_history_broadcast_info(ctx);
+    bool presence_changed = chat_ws_broadcast(ctx, payload);
+    presence_changed = chat_history_broadcast_info(ctx) || presence_changed;
+    if (presence_changed) {
+        chat_sessions_broadcast_online_users(ctx);
+    }
     return ESP_OK;
 }
 
@@ -348,8 +345,11 @@ static esp_err_t handle_history_request_message(app_context_t *ctx, int fd, cJSO
         return chat_ws_send_error(ctx, fd, "server_busy", "Unable to relay history request");
     }
 
-    chat_ws_broadcast(ctx, payload);
+    bool presence_changed = chat_ws_broadcast(ctx, payload);
     free(payload);
+    if (presence_changed) {
+        chat_sessions_broadcast_online_users(ctx);
+    }
     return ESP_OK;
 }
 
@@ -396,6 +396,7 @@ static esp_err_t handle_history_response_message(app_context_t *ctx, int fd, cJS
     esp_err_t ret = relay_payload_to_targets(ctx, to, payload);
     free(payload);
     if (ret != ESP_OK) {
+        chat_sessions_broadcast_online_users(ctx);
         return chat_ws_send_error(ctx, fd, "relay_failed", "Unable to relay history response");
     }
 
