@@ -14,9 +14,9 @@ static const char *TAG = "CHAT_HISTORY";
 
 bool chat_history_parse_since_id(const cJSON *root, uint64_t *since_id_out)
 {
-    cJSON *since_id = cJSON_GetObjectItem(root, "since_id");
+    cJSON *since_id = cJSON_GetObjectItemCaseSensitive(root, "since_id");
     if (since_id == NULL) {
-        since_id = cJSON_GetObjectItem(root, "last_seen_id");
+        since_id = cJSON_GetObjectItemCaseSensitive(root, "last_seen_id");
     }
 
     if (since_id_out == NULL) {

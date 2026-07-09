@@ -15,7 +15,7 @@ static const char *TAG = "CHAT_PROTOCOL";
 
 static bool validate_to_object(cJSON *root)
 {
-    cJSON *to = cJSON_GetObjectItem(root, "to");
+    cJSON *to = cJSON_GetObjectItemCaseSensitive(root, "to");
     if (to == NULL) {
         to = cJSON_AddObjectToObject(root, "to");
         if (to == NULL) {
@@ -26,7 +26,7 @@ static bool validate_to_object(cJSON *root)
         return false;
     }
 
-    cJSON *all = cJSON_GetObjectItem(to, "all");
+    cJSON *all = cJSON_GetObjectItemCaseSensitive(to, "all");
     if (all == NULL) {
         all = cJSON_AddBoolToObject(to, "all", false);
     }
@@ -34,7 +34,7 @@ static bool validate_to_object(cJSON *root)
         return false;
     }
 
-    cJSON *users = cJSON_GetObjectItem(to, "users");
+    cJSON *users = cJSON_GetObjectItemCaseSensitive(to, "users");
     if (users == NULL) {
         users = cJSON_AddArrayToObject(to, "users");
     }
@@ -58,22 +58,22 @@ static bool message_visible_to_user(cJSON *message, const char *user_id)
         return false;
     }
 
-    cJSON *from = cJSON_GetObjectItem(message, "from");
+    cJSON *from = cJSON_GetObjectItemCaseSensitive(message, "from");
     if (cJSON_IsString(from) && from->valuestring != NULL && strcmp(from->valuestring, user_id) == 0) {
         return true;
     }
 
-    cJSON *to = cJSON_GetObjectItem(message, "to");
+    cJSON *to = cJSON_GetObjectItemCaseSensitive(message, "to");
     if (!cJSON_IsObject(to)) {
         return false;
     }
 
-    cJSON *all = cJSON_GetObjectItem(to, "all");
+    cJSON *all = cJSON_GetObjectItemCaseSensitive(to, "all");
     if (cJSON_IsTrue(all)) {
         return true;
     }
 
-    return json_array_contains_string(cJSON_GetObjectItem(to, "users"), user_id);
+    return json_array_contains_string(cJSON_GetObjectItemCaseSensitive(to, "users"), user_id);
 }
 
 static bool json_safe_message_id(cJSON *item, bool allow_zero, uint64_t *id_out)
@@ -108,8 +108,8 @@ static esp_err_t relay_payload_to_targets(app_context_t *ctx, cJSON *to, const c
         return ESP_ERR_INVALID_ARG;
     }
 
-    cJSON *all = cJSON_GetObjectItem(to, "all");
-    cJSON *users = cJSON_GetObjectItem(to, "users");
+    cJSON *all = cJSON_GetObjectItemCaseSensitive(to, "all");
+    cJSON *users = cJSON_GetObjectItemCaseSensitive(to, "users");
     bool send_all = cJSON_IsTrue(all);
 
     if (!send_all && (!cJSON_IsArray(users) || cJSON_GetArraySize(users) == 0)) {
@@ -170,8 +170,8 @@ static esp_err_t require_joined_identity(app_context_t *ctx, int fd, cJSON *root
 
 static esp_err_t handle_join_message(app_context_t *ctx, int fd, cJSON *root)
 {
-    cJSON *from = cJSON_GetObjectItem(root, "from");
-    cJSON *name = cJSON_GetObjectItem(root, "name");
+    cJSON *from = cJSON_GetObjectItemCaseSensitive(root, "from");
+    cJSON *name = cJSON_GetObjectItemCaseSensitive(root, "name");
     uint64_t since_id = 0;
 
     if (!json_string_in_range(from, MAX_USER_ID_LEN, false) ||
@@ -207,9 +207,9 @@ static esp_err_t handle_join_message(app_context_t *ctx, int fd, cJSON *root)
 
 static esp_err_t handle_chat_message(app_context_t *ctx, int fd, cJSON *root)
 {
-    cJSON *type = cJSON_GetObjectItem(root, "type");
-    cJSON *from = cJSON_GetObjectItem(root, "from");
-    cJSON *name = cJSON_GetObjectItem(root, "name");
+    cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
+    cJSON *from = cJSON_GetObjectItemCaseSensitive(root, "from");
+    cJSON *name = cJSON_GetObjectItemCaseSensitive(root, "name");
 
     if (!json_string_in_range(from, MAX_USER_ID_LEN, false) ||
         !json_string_in_range(name, MAX_NAME_LEN, false)) {
@@ -217,7 +217,7 @@ static esp_err_t handle_chat_message(app_context_t *ctx, int fd, cJSON *root)
     }
 
     if (strcmp(type->valuestring, "text") == 0) {
-        cJSON *data = cJSON_GetObjectItem(root, "data");
+        cJSON *data = cJSON_GetObjectItemCaseSensitive(root, "data");
         if (!json_string_in_range(data, MAX_TEXT_BYTES, false)) {
             return chat_ws_send_error(ctx, fd, "bad_text", "Text message is empty or too long");
         }
@@ -225,9 +225,9 @@ static esp_err_t handle_chat_message(app_context_t *ctx, int fd, cJSON *root)
             return chat_ws_send_error(ctx, fd, "bad_target", "Message target must be all users or a non-empty user list");
         }
     } else if (strcmp(type->valuestring, "newGroup") == 0) {
-        cJSON *group_id = cJSON_GetObjectItem(root, "groupId");
-        cJSON *group_name = cJSON_GetObjectItem(root, "groupName");
-        cJSON *data = cJSON_GetObjectItem(root, "data");
+        cJSON *group_id = cJSON_GetObjectItemCaseSensitive(root, "groupId");
+        cJSON *group_name = cJSON_GetObjectItemCaseSensitive(root, "groupName");
+        cJSON *data = cJSON_GetObjectItemCaseSensitive(root, "data");
 
         if (!json_string_in_range(group_id, MAX_GROUP_ID_LEN, false) ||
             !json_string_in_range(group_name, MAX_GROUP_NAME_LEN, false) ||
@@ -263,11 +263,11 @@ static bool validate_history_message_object(cJSON *message)
         return false;
     }
 
-    cJSON *id = cJSON_GetObjectItem(message, "id");
-    cJSON *timestamp = cJSON_GetObjectItem(message, "timestamp");
-    cJSON *type = cJSON_GetObjectItem(message, "type");
-    cJSON *from = cJSON_GetObjectItem(message, "from");
-    cJSON *name = cJSON_GetObjectItem(message, "name");
+    cJSON *id = cJSON_GetObjectItemCaseSensitive(message, "id");
+    cJSON *timestamp = cJSON_GetObjectItemCaseSensitive(message, "timestamp");
+    cJSON *type = cJSON_GetObjectItemCaseSensitive(message, "type");
+    cJSON *from = cJSON_GetObjectItemCaseSensitive(message, "from");
+    cJSON *name = cJSON_GetObjectItemCaseSensitive(message, "name");
 
     if (!json_safe_message_id(id, false, NULL) ||
         !cJSON_IsNumber(timestamp) ||
@@ -279,13 +279,13 @@ static bool validate_history_message_object(cJSON *message)
     }
 
     if (strcmp(type->valuestring, "text") == 0) {
-        return json_string_in_range(cJSON_GetObjectItem(message, "data"), MAX_TEXT_BYTES, false);
+        return json_string_in_range(cJSON_GetObjectItemCaseSensitive(message, "data"), MAX_TEXT_BYTES, false);
     }
 
     if (strcmp(type->valuestring, "newGroup") == 0) {
-        return json_string_in_range(cJSON_GetObjectItem(message, "groupId"), MAX_GROUP_ID_LEN, false) &&
-            json_string_in_range(cJSON_GetObjectItem(message, "groupName"), MAX_GROUP_NAME_LEN, false) &&
-            json_string_in_range(cJSON_GetObjectItem(message, "data"), MAX_TEXT_BYTES, true);
+        return json_string_in_range(cJSON_GetObjectItemCaseSensitive(message, "groupId"), MAX_GROUP_ID_LEN, false) &&
+            json_string_in_range(cJSON_GetObjectItemCaseSensitive(message, "groupName"), MAX_GROUP_NAME_LEN, false) &&
+            json_string_in_range(cJSON_GetObjectItemCaseSensitive(message, "data"), MAX_TEXT_BYTES, true);
     }
 
     return false;
@@ -293,8 +293,8 @@ static bool validate_history_message_object(cJSON *message)
 
 static bool history_response_targets_match_message(cJSON *root, cJSON *message)
 {
-    cJSON *to = cJSON_GetObjectItem(root, "to");
-    cJSON *users = cJSON_IsObject(to) ? cJSON_GetObjectItem(to, "users") : NULL;
+    cJSON *to = cJSON_GetObjectItemCaseSensitive(root, "to");
+    cJSON *users = cJSON_IsObject(to) ? cJSON_GetObjectItemCaseSensitive(to, "users") : NULL;
     if (!cJSON_IsArray(users) || cJSON_GetArraySize(users) == 0) {
         return false;
     }
@@ -312,10 +312,10 @@ static bool history_response_targets_match_message(cJSON *root, cJSON *message)
 
 static esp_err_t handle_history_request_message(app_context_t *ctx, int fd, cJSON *root)
 {
-    cJSON *from = cJSON_GetObjectItem(root, "from");
-    cJSON *name = cJSON_GetObjectItem(root, "name");
-    cJSON *request_id = cJSON_GetObjectItem(root, "requestId");
-    cJSON *restore_before = cJSON_GetObjectItem(root, "restore_before_id");
+    cJSON *from = cJSON_GetObjectItemCaseSensitive(root, "from");
+    cJSON *name = cJSON_GetObjectItemCaseSensitive(root, "name");
+    cJSON *request_id = cJSON_GetObjectItemCaseSensitive(root, "requestId");
+    cJSON *restore_before = cJSON_GetObjectItemCaseSensitive(root, "restore_before_id");
 
     if (!json_string_in_range(from, MAX_USER_ID_LEN, false) ||
         !json_string_in_range(name, MAX_NAME_LEN, false) ||
@@ -355,10 +355,10 @@ static esp_err_t handle_history_request_message(app_context_t *ctx, int fd, cJSO
 
 static esp_err_t handle_history_response_message(app_context_t *ctx, int fd, cJSON *root)
 {
-    cJSON *from = cJSON_GetObjectItem(root, "from");
-    cJSON *name = cJSON_GetObjectItem(root, "name");
-    cJSON *request_id = cJSON_GetObjectItem(root, "requestId");
-    cJSON *message = cJSON_GetObjectItem(root, "message");
+    cJSON *from = cJSON_GetObjectItemCaseSensitive(root, "from");
+    cJSON *name = cJSON_GetObjectItemCaseSensitive(root, "name");
+    cJSON *request_id = cJSON_GetObjectItemCaseSensitive(root, "requestId");
+    cJSON *message = cJSON_GetObjectItemCaseSensitive(root, "message");
 
     if (!json_string_in_range(from, MAX_USER_ID_LEN, false) ||
         !json_string_in_range(name, MAX_NAME_LEN, false) ||
@@ -369,15 +369,15 @@ static esp_err_t handle_history_response_message(app_context_t *ctx, int fd, cJS
         return chat_ws_send_error(ctx, fd, "bad_history_response", "History response must target specific users");
     }
 
-    cJSON *to = cJSON_GetObjectItem(root, "to");
-    if (cJSON_IsTrue(cJSON_GetObjectItem(to, "all"))) {
+    cJSON *to = cJSON_GetObjectItemCaseSensitive(root, "to");
+    if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(to, "all"))) {
         return chat_ws_send_error(ctx, fd, "bad_history_response", "History response must target specific users");
     }
     if (!validate_history_message_object(message)) {
         return chat_ws_send_error(ctx, fd, "bad_history_response", "History response contains an invalid message");
     }
 
-    cJSON *id = cJSON_GetObjectItem(message, "id");
+    cJSON *id = cJSON_GetObjectItemCaseSensitive(message, "id");
     uint64_t response_id = 0;
     json_safe_message_id(id, false, &response_id);
     uint64_t restore_before_id = chat_history_current_restore_before_id(ctx);

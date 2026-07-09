@@ -218,7 +218,7 @@ chat_identity_status_t chat_sessions_check_identity(app_context_t *ctx, int fd, 
 
 void chat_sessions_update_time_sample(app_context_t *ctx, int fd, const cJSON *root)
 {
-    cJSON *timestamp = root ? cJSON_GetObjectItem(root, "timestamp") : NULL;
+    cJSON *timestamp = root ? cJSON_GetObjectItemCaseSensitive(root, "timestamp") : NULL;
     if (ctx == NULL ||
         !cJSON_IsNumber(timestamp) ||
         timestamp->valuedouble < VALID_EPOCH_START_S ||
