@@ -405,8 +405,11 @@ static esp_err_t handle_history_response_message(app_context_t *ctx, int fd, cJS
 
 esp_err_t chat_protocol_handle_json(app_context_t *ctx, int fd, cJSON *root)
 {
-    cJSON *type = cJSON_GetObjectItem(root, "type");
+    cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
     if (!json_string_in_range(type, 24, false)) {
+        if (!chat_sessions_is_joined(ctx, fd)) {
+            return send_error_and_close(ctx, fd, "bad_type", "Message type is required");
+        }
         return chat_ws_send_error(ctx, fd, "bad_type", "Message type is required");
     }
 
