@@ -414,10 +414,11 @@ esp_err_t chat_protocol_handle_json(app_context_t *ctx, int fd, cJSON *root)
     }
 
     if (strcmp(type->valuestring, "pong") == 0) {
-        chat_sessions_mark_alive(ctx, fd);
-        if (chat_sessions_is_joined(ctx, fd)) {
-            chat_sessions_update_time_sample(ctx, fd, root);
+        esp_err_t identity_ret = require_joined_identity(ctx, fd, root);
+        if (identity_ret != ESP_OK) {
+            return identity_ret;
         }
+        chat_sessions_mark_alive(ctx, fd);
         return ESP_OK;
     }
 
