@@ -432,8 +432,7 @@ esp_err_t chat_protocol_handle_json(app_context_t *ctx, int fd, cJSON *root)
     }
 
     if (strcmp(type->valuestring, "getOnlineUser") == 0) {
-        chat_sessions_send_online_users_to_client(ctx, fd);
-        return ESP_OK;
+        return chat_sessions_send_online_users_to_client(ctx, fd);
     }
 
     if (strcmp(type->valuestring, "text") == 0 || strcmp(type->valuestring, "newGroup") == 0) {
