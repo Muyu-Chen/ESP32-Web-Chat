@@ -42,6 +42,39 @@ bool json_array_contains_string(cJSON *array, const char *value)
     return false;
 }
 
+bool json_has_duplicate_keys(const cJSON *item)
+{
+    if (cJSON_IsObject(item)) {
+        const cJSON *child = NULL;
+        cJSON_ArrayForEach(child, item) {
+            if (child->string == NULL) {
+                return true;
+            }
+
+            const cJSON *other = child->next;
+            while (other != NULL) {
+                if (other->string != NULL && strcmp(child->string, other->string) == 0) {
+                    return true;
+                }
+                other = other->next;
+            }
+
+            if (json_has_duplicate_keys(child)) {
+                return true;
+            }
+        }
+    } else if (cJSON_IsArray(item)) {
+        const cJSON *child = NULL;
+        cJSON_ArrayForEach(child, item) {
+            if (json_has_duplicate_keys(child)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 int64_t device_uptime_s(void)
 {
     return esp_timer_get_time() / 1000000LL;
