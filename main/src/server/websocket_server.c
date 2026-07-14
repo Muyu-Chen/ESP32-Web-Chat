@@ -18,6 +18,9 @@ esp_err_t chat_ws_send_text(app_context_t *ctx, int fd, const char *payload)
     if (ctx == NULL || ctx->server == NULL || payload == NULL || fd < 0) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (httpd_ws_get_fd_info(ctx->server, fd) != HTTPD_WS_CLIENT_WEBSOCKET) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
     httpd_ws_frame_t ws_pkt;
     memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
