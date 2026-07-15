@@ -13,6 +13,15 @@
 
 static const char *TAG = "CHAT_WS";
 
+static void mark_broken_session(app_context_t *ctx, int fd, const char *stage, esp_err_t ret, int socket_errno)
+{
+    bool was_joined = chat_sessions_mark_closing(ctx, fd);
+    ESP_LOGW(TAG, "%s failed for fd=%d: %s, errno=%d", stage, fd, esp_err_to_name(ret), socket_errno);
+    if (was_joined) {
+        chat_sessions_broadcast_online_users(ctx);
+    }
+}
+
 esp_err_t chat_ws_send_text(app_context_t *ctx, int fd, const char *payload)
 {
     if (ctx == NULL || ctx->server == NULL || payload == NULL || fd < 0) {
@@ -174,26 +183,30 @@ esp_err_t chat_ws_handler(httpd_req_t *req)
 
     esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
     if (ret != ESP_OK) {
-        int err = errno;
-        if (err == ECONNRESET || err == ENOTCONN || err == EPIPE || err == ESHUTDOWN) {
-            ESP_LOGI(TAG, "Client disconnected, fd=%d", fd);
-            if (chat_sessions_remove_by_fd(ctx, fd)) {
-                chat_sessions_broadcast_online_users(ctx);
-            }
-            return ret;
-        }
-        if (err == EAGAIN || err == EWOULDBLOCK) {
-            return ESP_OK;
-        }
-
-        if (chat_sessions_remove_by_fd(ctx, fd)) {
-            chat_sessions_broadcast_online_users(ctx);
-        }
-        ESP_LOGW(TAG, "Frame probe failed for fd=%d ret=%d errno=%d", fd, ret, err);
+        int socket_errno = errno;
+        // The HTTP server may already have consumed part of the frame header.
+        // Retrying would interpret the remaining bytes as a new frame.
+        mark_broken_session(ctx, fd, "Frame probe", ret, socket_errno);
         return ret;
     }
 
+    if (ws_pkt.len == 0 && ws_pkt.type == HTTPD_WS_TYPE_PONG) {
+        if (!ws_pkt.final || !chat_sessions_is_joined(ctx, fd)) {
+            chat_ws_close_client(ctx, fd);
+        } else {
+            chat_sessions_mark_alive(ctx, fd);
+        }
+        return ESP_OK;
+    }
+
     if (ws_pkt.len == 0) {
+        bool is_text = ws_pkt.type == HTTPD_WS_TYPE_TEXT && ws_pkt.final;
+        chat_ws_send_error(ctx, fd,
+                           is_text ? "bad_json" : "bad_frame",
+                           is_text ? "Invalid JSON object" : "Only text WebSocket frames are supported");
+        if (!is_text || !chat_sessions_is_joined(ctx, fd)) {
+            chat_ws_close_client(ctx, fd);
+        }
         return ESP_OK;
     }
 
