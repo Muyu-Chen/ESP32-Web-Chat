@@ -213,7 +213,7 @@ esp_err_t chat_ws_handler(httpd_req_t *req)
     if (ws_pkt.len > MAX_WS_PAYLOAD_BYTES) {
         ESP_LOGW(TAG, "Payload too large from fd=%d: %d bytes", fd, (int)ws_pkt.len);
         chat_ws_send_error(ctx, fd, "payload_too_large", "WebSocket payload is too large");
-        if (chat_sessions_remove_by_fd(ctx, fd)) {
+        if (chat_sessions_mark_closing(ctx, fd)) {
             chat_sessions_broadcast_online_users(ctx);
         }
         return ESP_FAIL;
