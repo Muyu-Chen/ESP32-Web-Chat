@@ -228,11 +228,9 @@ esp_err_t chat_ws_handler(httpd_req_t *req)
     ws_pkt.payload = buf;
     ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Frame receive failed for fd=%d: %s", fd, esp_err_to_name(ret));
+        int socket_errno = errno;
         free(buf);
-        if (chat_sessions_remove_by_fd(ctx, fd)) {
-            chat_sessions_broadcast_online_users(ctx);
-        }
+        mark_broken_session(ctx, fd, "Frame receive", ret, socket_errno);
         return ret;
     }
 
