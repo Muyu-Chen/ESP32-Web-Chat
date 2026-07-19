@@ -242,8 +242,19 @@ esp_err_t chat_ws_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    if (ws_pkt.type != HTTPD_WS_TYPE_TEXT) {
+    if (ws_pkt.type == HTTPD_WS_TYPE_PONG) {
+        if (!ws_pkt.final || !chat_sessions_is_joined(ctx, fd)) {
+            chat_ws_close_client(ctx, fd);
+        } else {
+            chat_sessions_mark_alive(ctx, fd);
+        }
+        free(buf);
+        return ESP_OK;
+    }
+
+    if (ws_pkt.type != HTTPD_WS_TYPE_TEXT || !ws_pkt.final) {
         chat_ws_send_error(ctx, fd, "bad_frame", "Only text WebSocket frames are supported");
+        chat_ws_close_client(ctx, fd);
         free(buf);
         return ESP_OK;
     }
