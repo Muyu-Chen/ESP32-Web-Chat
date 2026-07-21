@@ -265,6 +265,9 @@ esp_err_t chat_ws_handler(httpd_req_t *req)
         : cJSON_ParseWithLengthOpts((const char *)ws_pkt.payload, ws_pkt.len + 1, NULL, true);
     if (root == NULL || !cJSON_IsObject(root) || json_has_duplicate_keys(root)) {
         chat_ws_send_error(ctx, fd, "bad_json", "Invalid JSON object");
+        if (!chat_sessions_is_joined(ctx, fd)) {
+            chat_ws_close_client(ctx, fd);
+        }
     } else {
         chat_protocol_handle_json(ctx, fd, root);
     }
