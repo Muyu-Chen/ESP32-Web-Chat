@@ -269,10 +269,10 @@ esp_err_t chat_ws_handler(httpd_req_t *req)
             chat_ws_close_client(ctx, fd);
         }
     } else {
-        chat_protocol_handle_json(ctx, fd, root);
+        ret = chat_protocol_handle_json(ctx, fd, root);
     }
 
     cJSON_Delete(root);
     free(buf);
-    return ESP_OK;
+    return ret;
 }
