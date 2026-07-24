@@ -74,6 +74,84 @@ let lastSeenId = 0;
 let historyInfo = null;
 let activeRecovery = null;
 
+function wsLog(event, details) {
+    if (details === undefined) {
+        console.log(`${WS_LOG_PREFIX} ${event}`);
+    } else {
+        console.log(`${WS_LOG_PREFIX} ${event}`, details);
+    }
+}
+
+function wsWarn(event, details) {
+    if (details === undefined) {
+        console.warn(`${WS_LOG_PREFIX} ${event}`);
+    } else {
+        console.warn(`${WS_LOG_PREFIX} ${event}`, details);
+    }
+}
+
+function wsError(event, details) {
+    if (details === undefined) {
+        console.error(`${WS_LOG_PREFIX} ${event}`);
+    } else {
+        console.error(`${WS_LOG_PREFIX} ${event}`, details);
+    }
+}
+
+function wsReadyStateName(socket) {
+    const states = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
+    return socket ? states[socket.readyState] || `UNKNOWN(${socket.readyState})` : 'NONE';
+}
+
+function wsDataSize(value) {
+    if (typeof value === 'string') {
+        let bytes = 0;
+        for (const character of value) {
+            const codePoint = character.codePointAt(0);
+            bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+        }
+        return bytes;
+    }
+    return Number(value?.byteLength ?? value?.size ?? 0);
+}
+
+function truncateUtf8(value, maxBytes) {
+    let result = '';
+    let usedBytes = 0;
+    for (const character of String(value || '')) {
+        const characterBytes = wsDataSize(character);
+        if (usedBytes + characterBytes > maxBytes) {
+            break;
+        }
+        result += character;
+        usedBytes += characterBytes;
+    }
+    return result;
+}
+
+function wsMessageSummary(payload, bytes) {
+    const summary = {
+        type: typeof payload?.type === 'string' ? payload.type : 'unknown'
+    };
+    if (Number.isSafeInteger(Number(payload?.id))) {
+        summary.id = Number(payload.id);
+    }
+    if (summary.type === 'join') {
+        summary.sinceId = Number(payload.since_id) || 0;
+    } else if (summary.type === 'onlineUsers') {
+        summary.users = Array.isArray(payload.data) ? payload.data.length : 0;
+    } else if (summary.type === 'historyInfo') {
+        summary.count = Number(payload.count) || 0;
+        summary.latestId = Number(payload.latest_id) || 0;
+    } else if (summary.type === 'error') {
+        summary.code = payload.code || 'error';
+    }
+    if (Number.isFinite(bytes)) {
+        summary.bytes = bytes;
+    }
+    return summary;
+}
+
 function generateUUID() {
     let d = new Date().getTime();
     let d2 = ((typeof performance !== 'undefined') && performance.now && (performance.now() * 1000)) || 0;
