@@ -187,9 +187,15 @@ function writeJSON(key, value) {
 }
 
 let userId = localStorage.getItem(STORAGE.userId);
-if (!userId) {
+if (!validUserId(userId)) {
+    const hadStoredUserId = Boolean(userId);
     userId = generateUUID();
     localStorage.setItem(STORAGE.userId, userId);
+    if (hadStoredUserId) {
+        wsWarn('Replaced invalid stored user ID');
+    } else {
+        wsLog('Generated browser user ID');
+    }
 }
 
 nicknameInput.value = localStorage.getItem(STORAGE.nickname) || `User${Math.floor(Math.random() * 1000)}`;
@@ -211,7 +217,8 @@ function loadState() {
     conversations = readJSON(STORAGE.conversations, {});
     conversations.global = { ...defaultConversation(), ...(conversations.global || {}) };
     outbox = readJSON(STORAGE.outbox, []);
-    lastSeenId = Number(localStorage.getItem(STORAGE.lastSeenId) || 0);
+    const storedLastSeenId = Number(localStorage.getItem(STORAGE.lastSeenId) || 0);
+    lastSeenId = Number.isSafeInteger(storedLastSeenId) && storedLastSeenId >= 0 ? storedLastSeenId : 0;
 
     const localMaxId = allMessages
         .filter((msg) => !msg.recovered)
