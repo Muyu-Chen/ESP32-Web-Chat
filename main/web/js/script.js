@@ -270,7 +270,8 @@ function setStatus(state, label) {
 }
 
 function getNickname() {
-    return (localStorage.getItem(STORAGE.nickname) || nicknameInput.value || 'Guest').trim().slice(0, 31);
+    const nickname = (localStorage.getItem(STORAGE.nickname) || nicknameInput.value || 'Guest').trim();
+    return truncateUtf8(nickname, 31);
 }
 
 function shortUserId(id) {
@@ -307,7 +308,7 @@ function isSafeMessageId(id) {
 }
 
 function validUserId(value) {
-    return typeof value === 'string' && value.length > 0 && value.length <= 63;
+    return typeof value === 'string' && value.length > 0 && wsDataSize(value) <= 63;
 }
 
 function validMessageTarget(to) {
@@ -327,21 +328,21 @@ function validHistoryMessage(msg) {
     if (msg.type !== 'text' && msg.type !== 'newGroup') {
         return false;
     }
-    if (!validUserId(msg.from) || typeof msg.name !== 'string' || msg.name.length === 0 || msg.name.length > 31) {
+    if (!validUserId(msg.from) || typeof msg.name !== 'string' || msg.name.length === 0 || wsDataSize(msg.name) > 31) {
         return false;
     }
     if (!validMessageTarget(msg.to) || !Number.isFinite(Number(msg.timestamp))) {
         return false;
     }
-    if (typeof msg.data !== 'string' || msg.data.length > 256) {
+    if (typeof msg.data !== 'string' || wsDataSize(msg.data) > 256) {
         return false;
     }
     if (msg.type === 'text' && msg.data.length === 0) {
         return false;
     }
     if (msg.type === 'newGroup') {
-        return typeof msg.groupId === 'string' && msg.groupId.length > 0 && msg.groupId.length <= 63 &&
-            typeof msg.groupName === 'string' && msg.groupName.length > 0 && msg.groupName.length <= 63;
+        return typeof msg.groupId === 'string' && msg.groupId.length > 0 && wsDataSize(msg.groupId) <= 63 &&
+            typeof msg.groupName === 'string' && msg.groupName.length > 0 && wsDataSize(msg.groupName) <= 63;
     }
     return true;
 }
