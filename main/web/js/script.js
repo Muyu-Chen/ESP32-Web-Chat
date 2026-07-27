@@ -637,21 +637,28 @@ function renderConversationList() {
 }
 
 function updateOnlineUsers(data) {
-    onlineUsers = new Map();
+    const nextOnlineUsers = new Map();
     if (Array.isArray(data)) {
         data.forEach((user) => {
-            if (user && user.id) {
-                onlineUsers.set(user.id, {
+            if (user && validUserId(user.id)) {
+                const validName = typeof user.name === 'string' && user.name.trim().length > 0 && wsDataSize(user.name) <= 31;
+                nextOnlineUsers.set(user.id, {
                     id: user.id,
-                    name: user.name || user.id.slice(0, 8)
+                    name: validName ? user.name : shortUserId(user.id)
                 });
             }
         });
     }
 
-    if (!onlineUsers.has(userId)) {
-        onlineUsers.set(userId, { id: userId, name: getNickname() });
+    if (!nextOnlineUsers.has(userId)) {
+        nextOnlineUsers.set(userId, { id: userId, name: getNickname() });
     }
+    onlineUsers = nextOnlineUsers;
+
+    wsLog('Presence updated', {
+        online: onlineUsers.size,
+        friends: otherOnlineUserCount()
+    });
 
     renderConversationList();
     updateRecoveryControls();
