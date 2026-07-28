@@ -665,9 +665,45 @@ function updateOnlineUsers(data) {
 }
 
 function sendRaw(payload) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(payload));
+    const socket = ws;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+        wsWarn('Send skipped because socket is not open', {
+            type: payload?.type || 'unknown',
+            state: wsReadyStateName(socket)
+        });
+        return false;
+    }
+
+    let encoded;
+    try {
+        encoded = JSON.stringify(payload);
+    } catch (error) {
+        wsError('Failed to encode outgoing message', {
+            type: payload?.type || 'unknown',
+            error
+        });
+        return false;
+    }
+
+    try {
+        socket.send(encoded);
+        const summary = wsMessageSummary(payload, wsDataSize(encoded));
+        if (payload?.type === 'pong') {
+            console.debug(`${WS_LOG_PREFIX} Sent heartbeat`, summary);
+        } else {
+            wsLog('Sent message', summary);
+        }
         return true;
+    } catch (error) {
+        wsWarn('WebSocket send failed', {
+            type: payload?.type || 'unknown',
+            state: wsReadyStateName(socket),
+            error
+        });
+        if (ws === socket) {
+            wsJoined = false;
+            socket.close();
+        }
     }
     return false;
 }
