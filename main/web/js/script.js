@@ -708,6 +708,48 @@ function sendRaw(payload) {
     return false;
 }
 
+function clearJoinTimer() {
+    if (joinTimer) {
+        clearTimeout(joinTimer);
+        joinTimer = null;
+    }
+}
+
+function armJoinTimer(socket) {
+    clearJoinTimer();
+    joinTimer = setTimeout(() => {
+        if (ws === socket && !wsJoined) {
+            wsWarn('Join timed out without server progress', {
+                timeoutMs: WS_JOIN_TIMEOUT_MS,
+                url: socket.url
+            });
+            setStatus('offline', 'Join timed out');
+            socket.close();
+        }
+    }, WS_JOIN_TIMEOUT_MS);
+}
+
+function confirmSocketJoin() {
+    if (wsJoined || !ws || ws.readyState !== WebSocket.OPEN) {
+        return;
+    }
+
+    wsJoined = true;
+    clearJoinTimer();
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+    reconnectDelayMs = 1000;
+    setStatus('online', 'Connected');
+    wsLog('Join confirmed', {
+        lastSeenId,
+        queuedMessages: outbox.length
+    });
+    flushOutbox();
+    updateRecoveryControls();
+}
+
 function sendControl(type, extra = {}) {
     return sendRaw({
         type,
