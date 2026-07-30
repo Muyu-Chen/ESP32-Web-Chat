@@ -750,6 +750,19 @@ function confirmSocketJoin() {
     updateRecoveryControls();
 }
 
+function resetSinceIdAndReconnect() {
+    lastSeenId = 0;
+    localStorage.setItem(STORAGE.lastSeenId, '0');
+    reconnectBlocked = false;
+    wsJoined = false;
+    clearJoinTimer();
+    if (ws) {
+        ws.close();
+    } else {
+        scheduleReconnect();
+    }
+}
+
 function sendControl(type, extra = {}) {
     return sendRaw({
         type,
