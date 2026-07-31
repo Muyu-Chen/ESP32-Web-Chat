@@ -776,22 +776,37 @@ function sendControl(type, extra = {}) {
 function queueMessage(message) {
     outbox.push(message);
     saveOutbox();
+    wsLog('Queued outgoing message', {
+        type: message?.type || 'unknown',
+        queuedMessages: outbox.length
+    });
     showSystemMessage('Message queued until the ESP32 connection returns.');
 }
 
 function flushOutbox() {
-    if (!ws || ws.readyState !== WebSocket.OPEN || outbox.length === 0) {
+    if (!wsJoined || !ws || ws.readyState !== WebSocket.OPEN || outbox.length === 0) {
         return;
     }
 
     const pending = [...outbox];
-    outbox = [];
-    saveOutbox();
-    pending.forEach((message) => {
+    let sent = 0;
+    for (const message of pending) {
         message.timestamp = Math.floor(Date.now() / 1000);
-        sendRaw(message);
-    });
-    showSystemMessage(`Sent ${pending.length} queued message${pending.length > 1 ? 's' : ''}.`);
+        if (!sendRaw(message)) {
+            break;
+        }
+        sent += 1;
+    }
+
+    outbox = pending.slice(sent);
+    saveOutbox();
+    if (sent > 0) {
+        wsLog('Flushed queued messages', {
+            sent,
+            remaining: outbox.length
+        });
+        showSystemMessage(`Sent ${sent} queued message${sent > 1 ? 's' : ''}.`);
+    }
 }
 
 function recoverySourceName(source) {
