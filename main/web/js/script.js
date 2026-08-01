@@ -831,6 +831,7 @@ function updateRecoveryControls() {
     const restoreBeforeId = Number(historyInfo?.restore_before_id || 0);
     const canRecover = ws &&
         ws.readyState === WebSocket.OPEN &&
+        wsJoined &&
         Number.isSafeInteger(restoreBeforeId) &&
         restoreBeforeId > 1 &&
         otherOnlineUserCount() > 0 &&
@@ -840,7 +841,7 @@ function updateRecoveryControls() {
 
     if (activeRecovery) {
         setRecoveryStatus(`Recovering before #${activeRecovery.restoreBeforeId}...`);
-    } else if (!ws || ws.readyState !== WebSocket.OPEN) {
+    } else if (!ws || ws.readyState !== WebSocket.OPEN || !wsJoined) {
         setRecoveryStatus('Connect to recover old messages.');
     } else if (!historyInfo) {
         setRecoveryStatus('Waiting for history boundary.');
@@ -938,7 +939,7 @@ function startHistoryRecovery() {
     }
 
     const restoreBeforeId = Number(historyInfo?.restore_before_id || 0);
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !wsJoined) {
         setRecoveryStatus('Connect to the ESP32 first.');
         return;
     }
