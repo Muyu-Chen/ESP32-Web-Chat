@@ -1050,11 +1050,15 @@ function handleHistoryResponse(msg) {
 function handleIncoming(event) {
     try {
         const msg = JSON.parse(event.data);
+        const summary = wsMessageSummary(msg, wsDataSize(event.data));
 
         if (msg.type === 'ping') {
+            console.debug(`${WS_LOG_PREFIX} Received heartbeat`, summary);
             sendRaw({ type: 'pong', from: userId, timestamp: Math.floor(Date.now() / 1000) });
             return;
         }
+
+        wsLog('Received message', summary);
 
         if (Number.isSafeInteger(Number(msg.id))) {
             rememberSeenId(msg.id);
