@@ -1080,6 +1080,7 @@ function handleIncoming(event) {
         }
 
         if (msg.type === 'onlineUsers') {
+            confirmSocketJoin();
             updateOnlineUsers(msg.data);
             return;
         }
