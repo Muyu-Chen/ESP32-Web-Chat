@@ -1086,7 +1086,22 @@ function handleIncoming(event) {
         }
 
         if (msg.type === 'error') {
+            wsWarn('Server rejected a message', summary);
             showSystemMessage(`Server error: ${msg.data || msg.code || 'unknown error'}`);
+            if (msg.code === 'bad_since_id') {
+                showSystemMessage('Reset local history cursor and reconnecting...');
+                resetSinceIdAndReconnect();
+            } else if (msg.code === 'session_replaced') {
+                reconnectBlocked = true;
+                wsJoined = false;
+                clearJoinTimer();
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                }
+                setStatus('offline', 'Open in another tab');
+                showSystemMessage('This session was replaced by another browser tab. Reload this page to reconnect here.');
+            }
             return;
         }
 
