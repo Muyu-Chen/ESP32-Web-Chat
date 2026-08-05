@@ -1118,7 +1118,10 @@ function handleIncoming(event) {
             renderConversationList();
         }
     } catch (error) {
-        console.error('Error parsing WebSocket message:', error);
+        wsError('Failed to process incoming message', {
+            bytes: wsDataSize(event.data),
+            error
+        });
     }
 }
 
