@@ -1126,16 +1126,22 @@ function handleIncoming(event) {
 }
 
 function scheduleReconnect() {
+    if (reconnectBlocked) {
+        wsWarn('Reconnect suppressed because this session was replaced');
+        return;
+    }
     if (reconnectTimer) {
         return;
     }
 
-    setStatus('offline', `Reconnecting in ${Math.round(reconnectDelayMs / 1000)}s`);
+    const delayMs = reconnectDelayMs;
+    setStatus('offline', `Reconnecting in ${Math.round(delayMs / 1000)}s`);
+    wsLog('Reconnect scheduled', { delayMs });
     reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
-        reconnectDelayMs = Math.min(reconnectDelayMs * 2, 15000);
+        reconnectDelayMs = Math.min(reconnectDelayMs * 2, WS_RECONNECT_MAX_DELAY_MS);
         connect();
-    }, reconnectDelayMs);
+    }, delayMs);
 }
 
 function websocketUrls() {
