@@ -1160,7 +1160,15 @@ function websocketUrls() {
 }
 
 function connect() {
+    if (reconnectBlocked) {
+        wsWarn('Connection attempt blocked because this session was replaced');
+        return;
+    }
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        console.debug(`${WS_LOG_PREFIX} Connection attempt skipped`, {
+            state: wsReadyStateName(ws),
+            url: ws.url
+        });
         return;
     }
 
