@@ -1175,14 +1175,29 @@ function connect() {
     setStatus('connecting', 'Connecting...');
     const urls = websocketUrls();
     const url = urls[Math.min(wsUrlAttempt, urls.length - 1)];
+    const connectionId = ++wsConnectionSequence;
     let opened = false;
+    let socket;
+
+    wsLog('Connecting', {
+        connectionId,
+        url,
+        candidate: wsUrlAttempt + 1,
+        candidates: urls.length
+    });
 
     try {
-        ws = new WebSocket(url);
+        socket = new WebSocket(url);
+        ws = socket;
     } catch (error) {
+        wsError('WebSocket constructor failed', { connectionId, url, error });
         ws = null;
         if (wsUrlAttempt < urls.length - 1) {
             wsUrlAttempt += 1;
+            wsLog('Trying fallback WebSocket address', {
+                connectionId,
+                nextUrl: urls[wsUrlAttempt]
+            });
             setStatus('connecting', 'Trying ESP32 address...');
             setTimeout(connect, WS_FALLBACK_DELAY_MS);
         } else {
@@ -1193,19 +1208,38 @@ function connect() {
         return;
     }
 
-    ws.onopen = () => {
+    socket.onopen = () => {
+        if (ws !== socket) {
+            wsWarn('Ignoring open event from stale socket', { connectionId, url });
+            return;
+        }
         opened = true;
         wsUrlAttempt = 0;
-        hasJoined = true;
-        reconnectDelayMs = 1000;
-        setStatus('online', 'Connected');
+        wsJoined = false;
+        wsLog('Socket opened', { connectionId, url });
+        setStatus('connecting', 'Joining...');
         updateRecoveryControls();
-        sendControl('join', { since_id: lastSeenId });
-        sendControl('getOnlineUser');
-        flushOutbox();
+        if (!sendControl('join', { since_id: lastSeenId })) {
+            wsWarn('Join send failed', { connectionId, lastSeenId });
+            socket.close();
+            return;
+        }
+        armJoinTimer(socket);
     };
 
-    ws.onmessage = handleIncoming;
+    socket.onmessage = (event) => {
+        if (ws === socket) {
+            if (!wsJoined) {
+                armJoinTimer(socket);
+            }
+            handleIncoming(event);
+        } else {
+            wsWarn('Ignoring message from stale socket', {
+                connectionId,
+                bytes: wsDataSize(event.data)
+            });
+        }
+    };
 
     ws.onclose = () => {
         ws = null;
