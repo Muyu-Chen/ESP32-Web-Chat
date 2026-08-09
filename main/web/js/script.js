@@ -1241,16 +1241,47 @@ function connect() {
         }
     };
 
-    ws.onclose = () => {
+    socket.onclose = (event) => {
+        if (ws !== socket) {
+            wsWarn('Ignoring close event from stale socket', {
+                connectionId,
+                code: event.code,
+                clean: event.wasClean
+            });
+            return;
+        }
+        const joinedBeforeClose = wsJoined;
+        wsWarn('Socket closed', {
+            connectionId,
+            url,
+            code: event.code,
+            reason: event.reason || '',
+            clean: event.wasClean,
+            opened,
+            joined: joinedBeforeClose
+        });
         ws = null;
+        wsJoined = false;
+        clearJoinTimer();
+        onlineUsers = new Map([[userId, { id: userId, name: getNickname() }]]);
+        renderConversationList();
         if (activeRecovery) {
             clearTimeout(activeRecovery.timer);
             activeRecovery = null;
             setRecoveryStatus('Recovery interrupted.');
         }
         updateRecoveryControls();
+        if (reconnectBlocked) {
+            setStatus('offline', 'Open in another tab');
+            wsWarn('Automatic reconnect remains disabled', { connectionId });
+            return;
+        }
         if (!opened && wsUrlAttempt < urls.length - 1) {
             wsUrlAttempt += 1;
+            wsLog('Trying fallback WebSocket address', {
+                connectionId,
+                nextUrl: urls[wsUrlAttempt]
+            });
             setStatus('connecting', 'Trying ESP32 address...');
             setTimeout(connect, WS_FALLBACK_DELAY_MS);
             return;
@@ -1260,8 +1291,15 @@ function connect() {
         scheduleReconnect();
     };
 
-    ws.onerror = () => {
-        setStatus('offline', 'Connection error');
+    socket.onerror = () => {
+        if (ws === socket) {
+            wsWarn('Socket error event', {
+                connectionId,
+                url,
+                state: wsReadyStateName(socket)
+            });
+            setStatus('offline', 'Connection error');
+        }
     };
 }
 
