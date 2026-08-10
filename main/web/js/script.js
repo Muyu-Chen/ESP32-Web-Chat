@@ -1339,10 +1339,10 @@ function sendMessage(event) {
         return;
     }
 
-    const message = buildOutgoingMessage(text.slice(0, 256));
+    const message = buildOutgoingMessage(truncateUtf8(text, 256));
     input.value = '';
 
-    if (!sendRaw(message)) {
+    if (!wsJoined || !sendRaw(message)) {
         queueMessage(message);
     }
 }
@@ -1391,7 +1391,7 @@ function createGroup() {
     const members = Array.from(new Set([userId, ...selectedIds]));
     const memberNames = members.map((id) => onlineUsers.get(id)?.name || (id === userId ? getNickname() : id.slice(0, 8)));
     const groupId = `group-${generateUUID()}`;
-    const groupName = memberNames.join(', ');
+    const groupName = truncateUtf8(memberNames.join(', '), 63);
 
     const message = {
         type: 'newGroup',
@@ -1418,7 +1418,7 @@ function createGroup() {
     renderMessages();
     renderConversationList();
 
-    if (!sendRaw(message)) {
+    if (!wsJoined || !sendRaw(message)) {
         queueMessage(message);
     }
 }
