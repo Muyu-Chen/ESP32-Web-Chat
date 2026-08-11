@@ -1521,16 +1521,22 @@ async function saveSettings(reboot) {
 }
 
 function enterChat() {
-    const nickname = nicknameInput.value.trim().slice(0, 31);
+    const nickname = truncateUtf8(nicknameInput.value.trim(), 31);
     if (!nickname) {
         alert('Please enter a nickname.');
         return;
     }
 
+    reconnectBlocked = false;
     hasJoined = true;
     localStorage.setItem(STORAGE.nickname, nickname);
     chatNickname.textContent = nickname;
     onlineUsers.set(userId, { id: userId, name: nickname });
+    wsLog('Entering chat', {
+        user: shortUserId(userId),
+        lastSeenId,
+        queuedMessages: outbox.length
+    });
 
     loginContainer.style.opacity = '0';
     setTimeout(() => {
