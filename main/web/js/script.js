@@ -1628,3 +1628,9 @@ chatNickname.textContent = getNickname();
 renderMessages();
 renderConversationList();
 updateRecoveryControls();
+wsLog('Client initialized', {
+    host: window.location.host || DEFAULT_AP_HOST,
+    lastSeenId,
+    storedMessages: allMessages.length,
+    queuedMessages: outbox.length
+});
