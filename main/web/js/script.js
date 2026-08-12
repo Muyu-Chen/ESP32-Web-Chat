@@ -1604,6 +1604,24 @@ themeSwitch.addEventListener('change', (event) => {
     setTheme(event.target.checked);
 });
 
+window.addEventListener('online', () => {
+    wsLog('Browser network is online');
+    if (hasJoined && !reconnectBlocked && (!ws || ws.readyState === WebSocket.CLOSED)) {
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+        reconnectDelayMs = 1000;
+        connect();
+    }
+});
+
+window.addEventListener('offline', () => {
+    wsWarn('Browser network is offline', {
+        state: wsReadyStateName(ws)
+    });
+});
+
 const savedTheme = localStorage.getItem(STORAGE.theme);
 setTheme(savedTheme === 'light' ? false : true);
 chatNickname.textContent = getNickname();
