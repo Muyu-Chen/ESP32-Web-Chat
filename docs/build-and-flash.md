@@ -7,14 +7,14 @@
 如果当前 shell 没有加载 ESP-IDF，可使用显式环境命令：
 
 ```bash
-cd /Users/muyu/Documents/Daily/ESP32-Web-Chat
+cd /path/to/ESP32-Web-Chat
 
 ESP_IDF_VERSION=6.0.1 \
-IDF_PYTHON_ENV_PATH=/Users/muyu/.espressif/tools/python/v6.0.1/venv \
-IDF_TOOLS_PATH=/Users/muyu/.espressif/tools \
-PATH="/Users/muyu/.espressif/tools/cmake/4.0.3/CMake.app/Contents/bin:/Users/muyu/.espressif/tools/ninja/1.12.1:/Users/muyu/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin:$PATH" \
-/Users/muyu/.espressif/tools/python/v6.0.1/venv/bin/python3 \
-/Users/muyu/.espressif/v6.0.1/esp-idf/tools/idf.py -G Ninja build
+IDF_PYTHON_ENV_PATH=/path/to/.espressif/tools/python/v6.0.1/venv \
+IDF_TOOLS_PATH=/path/to/.espressif/tools \
+PATH="/path/to/.espressif/tools/cmake/4.0.3/CMake.app/Contents/bin:/path/to/.espressif/tools/ninja/1.12.1:/path/to/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin:$PATH" \
+/path/to/.espressif/tools/python/v6.0.1/venv/bin/python3 \
+/path/to/.espressif/v6.0.1/esp-idf/tools/idf.py -G Ninja build
 ```
 
 如果已经加载 ESP-IDF 环境，也可以直接运行：
@@ -33,7 +33,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 
 ## 分区
 
-项目使用 `sdkconfig.defaults` 指向 `partitions_example.csv`。
+项目使用 `sdkconfig.defaults` 指向 `partitions.csv`。
 
 当前分区包含：
 

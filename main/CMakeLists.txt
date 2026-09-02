@@ -11,7 +11,6 @@ idf_component_register(
         "src/chat/history.c"
         "src/chat/protocol.c"
         "src/storage/message_id_store.c"
-        "src/storage/mount.c"
     INCLUDE_DIRS
         "include"
     EMBED_FILES

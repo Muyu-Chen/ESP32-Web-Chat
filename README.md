@@ -50,8 +50,8 @@ For the Chinese version, see [README-CN.md](README-CN.md).
 1. Clone the repository
 
    ```bash
-   git clone https://github.com/your-username/esp32-chat.git
-   cd esp32-chat
+   git clone https://github.com/Muyu-Chen/ESP32-Web-Chat.git
+   cd ESP32-Web-Chat
    ```
 
 2. Flash the firmware
@@ -119,7 +119,7 @@ ESP32-Web-Chat/
 │   └── build-and-flash.md
 ├── CMakeLists.txt
 ├── sdkconfig.defaults
-├── partitions_example.csv
+├── partitions.csv
 ├── LICENSE
 ├── README.md
 └── README-CN.md
@@ -189,8 +189,8 @@ Contributions are welcome. A typical workflow looks like this:
 - [ ] Add optional persistent history in NVS, SPIFFS, or SD card storage with retention controls and a clear-room action
 - [x] Complete online user presence basics with nickname registration, online list updates, and heartbeat-driven cleanup visible in the UI
 - [ ] Add optional join and leave system notices
-- [ ] Finish private chat and group chat flows, or hide unfinished conversation-list UI until the backend protocol fully supports it
-- [ ] Improve reconnect UX with exponential backoff, connection-state badges, an offline send queue, and duplicate-message prevention across reloads
+- [x] Finish private chat and group chat basics (messages route through server; clients filter by recipient)
+- [x] Improve reconnect UX with exponential backoff, connection-state badges, an offline send queue, and duplicate-message prevention across reloads
 - [ ] Harden captive portal support for iOS, Android, and Windows detection URLs, safer DNS response bounds checking, and clearer fallback instructions
 - [ ] Optimize front-end asset size and caching headers to reduce RAM and flash pressure and speed up first load on constrained boards
 - [ ] Add security and privacy guidance covering local-only scope, WPA2 password choices, setup-page protection, and the fact that no cloud storage is used
