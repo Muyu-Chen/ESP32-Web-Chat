@@ -75,9 +75,50 @@ bool json_has_duplicate_keys(const cJSON *item)
     return false;
 }
 
+static bool valid_utf8(const char *payload, size_t length)
+{
+    for (size_t i = 0; i < length;) {
+        uint32_t codepoint = (unsigned char)payload[i++];
+        unsigned continuation;
+        uint32_t minimum;
+        if (codepoint < 0x80) {
+            continue;
+        } else if (codepoint >= 0xc2 && codepoint <= 0xdf) {
+            continuation = 1;
+            minimum = 0x80;
+            codepoint &= 0x1f;
+        } else if (codepoint >= 0xe0 && codepoint <= 0xef) {
+            continuation = 2;
+            minimum = 0x800;
+            codepoint &= 0x0f;
+        } else if (codepoint >= 0xf0 && codepoint <= 0xf4) {
+            continuation = 3;
+            minimum = 0x10000;
+            codepoint &= 0x07;
+        } else {
+            return false;
+        }
+        if (length - i < continuation) {
+            return false;
+        }
+        for (unsigned j = 0; j < continuation; j++) {
+            unsigned char byte = (unsigned char)payload[i++];
+            if ((byte & 0xc0) != 0x80) {
+                return false;
+            }
+            codepoint = (codepoint << 6) | (byte & 0x3f);
+        }
+        if (codepoint < minimum || codepoint > 0x10ffff ||
+            (codepoint >= 0xd800 && codepoint <= 0xdfff)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 cJSON *chat_json_parse_object(const char *payload, size_t length)
 {
-    if (payload == NULL || length == 0) {
+    if (payload == NULL || length == 0 || !valid_utf8(payload, length)) {
         return NULL;
     }
 

@@ -16,6 +16,19 @@ static void test_json(void)
     cJSON *root = chat_json_parse_object(valid, strlen(valid));
     assert(root);
     cJSON_Delete(root);
+
+    const char *invalid_utf8[] = {
+        "{\"x\":\"\x80\"}", "{\"x\":\"\xc0\xaf\"}", "{\"x\":\"\xe0\x80\xaf\"}",
+        "{\"x\":\"\xed\xa0\x80\"}", "{\"x\":\"\xf4\x90\x80\x80\"}",
+        "{\"x\":\"\xf5\x80\x80\x80\"}", "{\"x\":\"\xe4\xb8\"}"
+    };
+    for (size_t i = 0; i < sizeof(invalid_utf8) / sizeof(invalid_utf8[0]); i++) {
+        assert(chat_json_parse_object(invalid_utf8[i], strlen(invalid_utf8[i])) == NULL);
+    }
+    const char *valid_utf8 = "{\"x\":\"\xe4\xb8\xad\xe6\x96\x87 \xf0\x9f\x98\x80\"}";
+    root = chat_json_parse_object(valid_utf8, strlen(valid_utf8));
+    assert(root);
+    cJSON_Delete(root);
     const char exact_buffer[] = { '{', '}' };
     root = chat_json_parse_object(exact_buffer, sizeof(exact_buffer));
     assert(root);
