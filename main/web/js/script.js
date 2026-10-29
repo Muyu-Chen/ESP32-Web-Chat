@@ -168,9 +168,28 @@ function generateUUID() {
     });
 }
 
+function readStoredValue(key) {
+    try {
+        return localStorage.getItem(key);
+    } catch (error) {
+        console.warn(`Failed to read ${key}:`, error);
+        return null;
+    }
+}
+
+function writeStoredValue(key, value) {
+    try {
+        localStorage.setItem(key, value);
+        return true;
+    } catch (error) {
+        console.warn(`Failed to store ${key}:`, error);
+        return false;
+    }
+}
+
 function readJSON(key, fallback) {
     try {
-        const raw = localStorage.getItem(key);
+        const raw = readStoredValue(key);
         return raw ? JSON.parse(raw) : fallback;
     } catch (error) {
         console.warn(`Failed to parse ${key}:`, error);
@@ -180,17 +199,18 @@ function readJSON(key, fallback) {
 
 function writeJSON(key, value) {
     try {
-        localStorage.setItem(key, JSON.stringify(value));
+        return writeStoredValue(key, JSON.stringify(value));
     } catch (error) {
         console.warn(`Failed to store ${key}:`, error);
+        return false;
     }
 }
 
-let userId = localStorage.getItem(STORAGE.userId);
+let userId = readStoredValue(STORAGE.userId);
 if (!validUserId(userId)) {
     const hadStoredUserId = Boolean(userId);
     userId = generateUUID();
-    localStorage.setItem(STORAGE.userId, userId);
+    writeStoredValue(STORAGE.userId, userId);
     if (hadStoredUserId) {
         wsWarn('Replaced invalid stored user ID');
     } else {
@@ -198,7 +218,7 @@ if (!validUserId(userId)) {
     }
 }
 
-nicknameInput.value = localStorage.getItem(STORAGE.nickname) || `User${Math.floor(Math.random() * 1000)}`;
+nicknameInput.value = readStoredValue(STORAGE.nickname) || `User${Math.floor(Math.random() * 1000)}`;
 loginDeviceId.textContent = `Device ID: ${userId.slice(0, 8)}`;
 
 function defaultConversation() {
@@ -213,18 +233,36 @@ function defaultConversation() {
 }
 
 function loadState() {
-    allMessages = readJSON(STORAGE.messages, []).filter((msg) => msg && isSafeMessageId(msg.id));
-    conversations = readJSON(STORAGE.conversations, {});
+    const storedMessages = readJSON(STORAGE.messages, []);
+    allMessages = Array.isArray(storedMessages) ? storedMessages.filter(validHistoryMessage) : [];
+    const storedConversations = readJSON(STORAGE.conversations, {});
+    conversations = Object.create(null);
+    if (storedConversations && typeof storedConversations === 'object' && !Array.isArray(storedConversations)) {
+        Object.entries(storedConversations).forEach(([id, conversation]) => {
+            if (validUserId(id) && conversation && conversation.id === id && typeof conversation.name === 'string' &&
+                (id === 'global' ? conversation.type === 'global' : ['group', 'private'].includes(conversation.type)) &&
+                Array.isArray(conversation.members) && conversation.members.every(validUserId)) {
+                conversations[id] = conversation;
+            }
+        });
+    }
     conversations.global = { ...defaultConversation(), ...(conversations.global || {}) };
-    outbox = readJSON(STORAGE.outbox, []);
-    const storedLastSeenId = Number(localStorage.getItem(STORAGE.lastSeenId) || 0);
+    const storedOutbox = readJSON(STORAGE.outbox, []);
+    outbox = Array.isArray(storedOutbox)
+        ? storedOutbox.filter((msg) => validHistoryMessage({ ...msg, id: 1 }) && msg.from === userId)
+        : [];
+    const storedLastSeenId = Number(readStoredValue(STORAGE.lastSeenId) || 0);
     lastSeenId = Number.isSafeInteger(storedLastSeenId) && storedLastSeenId >= 0 ? storedLastSeenId : 0;
 
     const localMaxId = allMessages
         .filter((msg) => !msg.recovered)
         .reduce((maxId, msg) => Math.max(maxId, Number(msg.id) || 0), 0);
     lastSeenId = Math.max(lastSeenId, localMaxId);
-    localStorage.setItem(STORAGE.lastSeenId, String(lastSeenId));
+    // Persist the message snapshot before advancing its durable replay cursor.
+    if (saveMessages()) {
+        writeStoredValue(STORAGE.lastSeenId, String(lastSeenId));
+    }
+    allMessages.forEach(updateConversationFromMessage);
 }
 
 let currentConversation = defaultConversation();
@@ -244,7 +282,7 @@ function saveMessages() {
     } else {
         allMessages = sorted;
     }
-    writeJSON(STORAGE.messages, allMessages);
+    return writeJSON(STORAGE.messages, allMessages);
 }
 
 function saveConversations() {
@@ -260,7 +298,7 @@ function rememberSeenId(id) {
     const numericId = Number(id);
     if (Number.isSafeInteger(numericId) && numericId > lastSeenId) {
         lastSeenId = numericId;
-        localStorage.setItem(STORAGE.lastSeenId, String(lastSeenId));
+        writeStoredValue(STORAGE.lastSeenId, String(lastSeenId));
     }
 }
 
@@ -270,7 +308,7 @@ function setStatus(state, label) {
 }
 
 function getNickname() {
-    const nickname = (localStorage.getItem(STORAGE.nickname) || nicknameInput.value || 'Guest').trim();
+    const nickname = (readStoredValue(STORAGE.nickname) || nicknameInput.value || 'Guest').trim();
     return truncateUtf8(nickname, 31);
 }
 
@@ -752,7 +790,7 @@ function confirmSocketJoin() {
 
 function resetSinceIdAndReconnect() {
     lastSeenId = 0;
-    localStorage.setItem(STORAGE.lastSeenId, '0');
+    writeStoredValue(STORAGE.lastSeenId, '0');
     reconnectBlocked = false;
     wsJoined = false;
     clearJoinTimer();
@@ -1529,7 +1567,7 @@ function enterChat() {
 
     reconnectBlocked = false;
     hasJoined = true;
-    localStorage.setItem(STORAGE.nickname, nickname);
+    writeStoredValue(STORAGE.nickname, nickname);
     chatNickname.textContent = nickname;
     onlineUsers.set(userId, { id: userId, name: nickname });
     wsLog('Entering chat', {
@@ -1551,7 +1589,7 @@ function enterChat() {
 function setTheme(isDark) {
     document.body.classList.toggle('dark-mode', isDark);
     themeSwitch.checked = isDark;
-    localStorage.setItem(STORAGE.theme, isDark ? 'dark' : 'light');
+    writeStoredValue(STORAGE.theme, isDark ? 'dark' : 'light');
 }
 
 joinBtn.addEventListener('click', enterChat);
@@ -1622,7 +1660,7 @@ window.addEventListener('offline', () => {
     });
 });
 
-const savedTheme = localStorage.getItem(STORAGE.theme);
+const savedTheme = readStoredValue(STORAGE.theme);
 setTheme(savedTheme === 'light' ? false : true);
 chatNickname.textContent = getNickname();
 renderMessages();
