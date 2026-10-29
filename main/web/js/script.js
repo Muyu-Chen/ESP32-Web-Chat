@@ -53,6 +53,7 @@ const MAX_SAFE_MESSAGE_ID = Number.MAX_SAFE_INTEGER;
 const HISTORY_RECOVERY_WINDOW_MS = 4000;
 const DEFAULT_AP_HOST = '192.168.4.1';
 const WS_FALLBACK_DELAY_MS = 250;
+const WS_CONNECT_TIMEOUT_MS = 10000;
 const WS_JOIN_TIMEOUT_MS = 15000;
 const WS_RECONNECT_MAX_DELAY_MS = 15000;
 const WS_LOG_PREFIX = '[ESP Chat WS]';
@@ -61,6 +62,7 @@ let ws = null;
 let wsJoined = false;
 let hasJoined = false;
 let reconnectTimer = null;
+let connectTimer = null;
 let joinTimer = null;
 let reconnectDelayMs = 1000;
 let wsUrlAttempt = 0;
@@ -764,6 +766,14 @@ function clearJoinTimer() {
     }
 }
 
+function clearConnectTimer() {
+    if (connectTimer) {
+        clearTimeout(connectTimer);
+        connectTimer = null;
+    }
+}
+
+
 function armJoinTimer(socket) {
     clearJoinTimer();
     joinTimer = setTimeout(() => {
@@ -1125,6 +1135,10 @@ function handleIncoming(event) {
         }
 
         if (msg.type === 'onlineUsers') {
+            if (!Array.isArray(msg.data) || !msg.data.some((user) => user?.id === userId)) {
+                wsWarn('Ignored invalid presence confirmation');
+                return;
+            }
             confirmSocketJoin();
             updateOnlineUsers(msg.data);
             return;
@@ -1253,11 +1267,20 @@ function connect() {
         return;
     }
 
+    clearConnectTimer();
+    connectTimer = setTimeout(() => {
+        if (ws === socket && socket.readyState === WebSocket.CONNECTING) {
+            wsWarn('WebSocket handshake timed out', { connectionId, url });
+            socket.close();
+        }
+    }, WS_CONNECT_TIMEOUT_MS);
+
     socket.onopen = () => {
         if (ws !== socket) {
             wsWarn('Ignoring open event from stale socket', { connectionId, url });
             return;
         }
+        clearConnectTimer();
         opened = true;
         wsUrlAttempt = 0;
         wsJoined = false;
@@ -1307,6 +1330,7 @@ function connect() {
         });
         ws = null;
         wsJoined = false;
+        clearConnectTimer();
         clearJoinTimer();
         onlineUsers = new Map([[userId, { id: userId, name: getNickname() }]]);
         renderConversationList();
