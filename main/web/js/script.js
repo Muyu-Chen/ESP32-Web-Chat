@@ -274,12 +274,15 @@ currentConversation = conversations.global;
 function saveMessages() {
     const sorted = allMessages.sort((a, b) => Number(a.id) - Number(b.id));
     if (sorted.length > MAX_LOCAL_MESSAGES) {
-        const recovered = sorted.filter((msg) => msg.recovered).slice(-MAX_LOCAL_MESSAGES);
+        const recovered = sorted.filter((msg) => msg.recovered);
         const regular = sorted.filter((msg) => !msg.recovered);
-        const regularSlots = MAX_LOCAL_MESSAGES - recovered.length;
+        // Reserve room for live messages even when restored history fills the cache.
+        const regularSlots = Math.min(regular.length,
+            Math.max(MAX_LOCAL_MESSAGES - recovered.length, Math.ceil(MAX_LOCAL_MESSAGES / 2)));
+        const recoveredSlots = MAX_LOCAL_MESSAGES - regularSlots;
         allMessages = [
             ...(regularSlots > 0 ? regular.slice(-regularSlots) : []),
-            ...recovered
+            ...(recoveredSlots > 0 ? recovered.slice(-recoveredSlots) : [])
         ].sort((a, b) => Number(a.id) - Number(b.id));
     } else {
         allMessages = sorted;
