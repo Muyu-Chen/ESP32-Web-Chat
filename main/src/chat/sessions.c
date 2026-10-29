@@ -426,6 +426,7 @@ bool chat_sessions_broadcast_online_users(app_context_t *ctx)
             ctx->presence_broadcast_pending = false;
             xSemaphoreGive(ctx->client_mutex);
         }
+        return false;
     }
 
     return broadcast_online_users_now(ctx);
@@ -444,82 +445,109 @@ esp_err_t chat_sessions_send_online_users_to_client(app_context_t *ctx, int fd)
     return ret;
 }
 
-static void heartbeat_task(void *pvParameters)
+static void heartbeat_sweep_work(void *arg)
 {
-    app_context_t *ctx = (app_context_t *)pvParameters;
+    app_context_t *ctx = (app_context_t *)arg;
     const char *ping_payload = "{\"type\":\"ping\"}";
 
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(SESSION_SWEEP_INTERVAL_MS));
+    bool changed = false;
+    int64_t now_s = device_uptime_s();
+    int ping_fds[MAX_CLIENTS];
+    int ping_count = 0;
+    int close_fds[MAX_CLIENTS];
+    int close_count = 0;
+    if (ctx == NULL || xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    ctx->heartbeat_sweep_pending = false;
 
-        bool changed = false;
-        int64_t now_s = device_uptime_s();
-        int ping_fds[MAX_CLIENTS];
-        int ping_count = 0;
-        int close_fds[MAX_CLIENTS];
-        int close_count = 0;
-        if (ctx == NULL || xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) != pdTRUE) {
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (!ctx->client_slots[i].active || ctx->client_slots[i].closing) {
             continue;
         }
 
-        for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (!ctx->client_slots[i].active || ctx->client_slots[i].closing) {
+        if (!ctx->client_slots[i].joined) {
+            if (now_s - ctx->client_slots[i].registered_at_s < WS_JOIN_TIMEOUT_S) {
                 continue;
             }
-
-            if (!ctx->client_slots[i].joined) {
-                if (now_s - ctx->client_slots[i].registered_at_s < WS_JOIN_TIMEOUT_S) {
-                    continue;
-                }
-                ESP_LOGW(TAG, "Client fd=%d did not join; closing", ctx->client_slots[i].fd);
-                if (close_count < MAX_CLIENTS) {
-                    close_fds[close_count++] = ctx->client_slots[i].fd;
-                }
-                mark_slot_closing(&ctx->client_slots[i]);
-                continue;
+            ESP_LOGW(TAG, "Client fd=%d did not join; closing", ctx->client_slots[i].fd);
+            if (close_count < MAX_CLIENTS) {
+                close_fds[close_count++] = ctx->client_slots[i].fd;
             }
+            mark_slot_closing(&ctx->client_slots[i]);
+            continue;
+        }
 
-            if (!ctx->client_slots[i].is_alive) {
-                if (now_s - ctx->client_slots[i].last_ping_s < HEARTBEAT_INTERVAL_S) {
-                    continue;
-                }
-                ESP_LOGW(TAG, "Client fd=%d missed heartbeat; closing", ctx->client_slots[i].fd);
-                if (close_count < MAX_CLIENTS) {
-                    close_fds[close_count++] = ctx->client_slots[i].fd;
-                }
-                mark_slot_closing(&ctx->client_slots[i]);
-                changed = true;
-                continue;
-            }
-
+        if (!ctx->client_slots[i].is_alive) {
             if (now_s - ctx->client_slots[i].last_ping_s < HEARTBEAT_INTERVAL_S) {
                 continue;
             }
-
-            ctx->client_slots[i].is_alive = false;
-            ctx->client_slots[i].last_ping_s = now_s;
-            if (ping_count < MAX_CLIENTS) {
-                ping_fds[ping_count++] = ctx->client_slots[i].fd;
+            ESP_LOGW(TAG, "Client fd=%d missed heartbeat; closing", ctx->client_slots[i].fd);
+            if (close_count < MAX_CLIENTS) {
+                close_fds[close_count++] = ctx->client_slots[i].fd;
             }
+            mark_slot_closing(&ctx->client_slots[i]);
+            changed = true;
+            continue;
         }
 
+        if (now_s - ctx->client_slots[i].last_ping_s < HEARTBEAT_INTERVAL_S) {
+            continue;
+        }
+
+        ctx->client_slots[i].is_alive = false;
+        ctx->client_slots[i].last_ping_s = now_s;
+        if (ping_count < MAX_CLIENTS) {
+            ping_fds[ping_count++] = ctx->client_slots[i].fd;
+        }
+    }
+
+    xSemaphoreGive(ctx->client_mutex);
+
+    for (int i = 0; i < close_count; i++) {
+        chat_ws_close_client(ctx, close_fds[i]);
+    }
+
+    for (int i = 0; i < ping_count; i++) {
+        esp_err_t ret = chat_ws_send_text(ctx, ping_fds[i], ping_payload);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Ping failed for fd=%d: %s", ping_fds[i], esp_err_to_name(ret));
+            chat_ws_close_client(ctx, ping_fds[i]);
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        chat_sessions_broadcast_online_users(ctx);
+    }
+}
+
+static void heartbeat_task(void *pvParameters)
+{
+    app_context_t *ctx = (app_context_t *)pvParameters;
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(SESSION_SWEEP_INTERVAL_MS));
+        if (ctx == NULL || ctx->server == NULL ||
+            xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+
+        bool should_queue = !ctx->heartbeat_sweep_pending;
+        ctx->heartbeat_sweep_pending = true;
         xSemaphoreGive(ctx->client_mutex);
-
-        for (int i = 0; i < close_count; i++) {
-            chat_ws_close_client(ctx, close_fds[i]);
+        if (!should_queue) {
+            continue;
         }
 
-        for (int i = 0; i < ping_count; i++) {
-            esp_err_t ret = chat_ws_send_text(ctx, ping_fds[i], ping_payload);
-            if (ret != ESP_OK) {
-                ESP_LOGW(TAG, "Ping failed for fd=%d: %s", ping_fds[i], esp_err_to_name(ret));
-                chat_ws_close_client(ctx, ping_fds[i]);
-                changed = true;
+        // Inspect and use socket descriptors on the HTTP task so they cannot be reused between steps.
+        esp_err_t ret = httpd_queue_work(ctx->server, heartbeat_sweep_work, ctx);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to queue heartbeat sweep: %s", esp_err_to_name(ret));
+            if (xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) == pdTRUE) {
+                ctx->heartbeat_sweep_pending = false;
+                xSemaphoreGive(ctx->client_mutex);
             }
-        }
-
-        if (changed) {
-            chat_sessions_broadcast_online_users(ctx);
         }
     }
 }
