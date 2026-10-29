@@ -1139,6 +1139,12 @@ function handleIncoming(event) {
         const msg = JSON.parse(event.data);
         const summary = wsMessageSummary(msg, wsDataSize(event.data));
 
+        const historyProgress = msg?.type === 'historyInfo' &&
+            Number.isSafeInteger(msg.restore_before_id) && msg.restore_before_id >= 0;
+        if (!wsJoined && ws && (historyProgress || validHistoryMessage(msg))) {
+            armJoinTimer(ws);
+        }
+
         if (msg.type === 'ping') {
             console.debug(`${WS_LOG_PREFIX} Received heartbeat`, summary);
             sendRaw({ type: 'pong', from: userId, timestamp: Math.floor(Date.now() / 1000) });
@@ -1334,9 +1340,6 @@ function connect() {
 
     socket.onmessage = (event) => {
         if (ws === socket) {
-            if (!wsJoined) {
-                armJoinTimer(socket);
-            }
             handleIncoming(event);
         } else {
             wsWarn('Ignoring message from stale socket', {
