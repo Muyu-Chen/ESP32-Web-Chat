@@ -56,6 +56,11 @@ int main(void)
         cJSON_Delete(root);
     }
 
+    char *info = chat_history_build_info_payload(&ctx);
+    cJSON *root = cJSON_Parse(info);
+    assert(cJSON_GetObjectItemCaseSensitive(root, "heartbeat_interval_s")->valueint == HEARTBEAT_INTERVAL_S);
+    cJSON_Delete(root);
+    free(info);
     reset();
-    puts("Protocol regressions passed: identity rejection and since_id replay");
+    puts("Protocol regressions passed: identity rejection, since_id replay and heartbeat metadata");
 }

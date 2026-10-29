@@ -98,6 +98,7 @@ char *chat_history_build_info_payload(app_context_t *ctx)
     cJSON_AddStringToObject(root, "type", "historyInfo");
     cJSON_AddStringToObject(root, "from", "server");
     cJSON_AddNumberToObject(root, "timestamp", current_timestamp_s(ctx));
+    cJSON_AddNumberToObject(root, "heartbeat_interval_s", HEARTBEAT_INTERVAL_S);
 
     cJSON *to = cJSON_AddObjectToObject(root, "to");
     cJSON *users = to ? cJSON_AddArrayToObject(to, "users") : NULL;

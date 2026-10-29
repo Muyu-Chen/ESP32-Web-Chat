@@ -256,10 +256,14 @@ WebSocket 路径是 `/ws`，只支持文本 JSON 帧。
   "restore_before_id": 31,
   "count": 100,
   "capacity": 100,
+  "heartbeat_interval_s": 30,
   "has_more_before": true
 }
 ```
 
+`heartbeat_interval_s` 是可选兼容字段。网页在两倍心跳周期加 5 秒内收不到服务端流量时，
+会解除旧 socket 的状态绑定并重连，不依赖浏览器及时触发 `onclose`。
+旧服务端不提供此字段时使用 300 秒心跳周期作为保守回退。
 join 等待只由有效历史消息或历史边界进度延长，心跳不会无限延长 join 超时。
 
 ### `error`

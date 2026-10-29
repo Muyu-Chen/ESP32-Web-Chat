@@ -56,6 +56,8 @@ const WS_FALLBACK_DELAY_MS = 250;
 const WS_CONNECT_TIMEOUT_MS = 10000;
 const WS_JOIN_TIMEOUT_MS = 15000;
 const WS_RECONNECT_MAX_DELAY_MS = 15000;
+const WS_HEARTBEAT_MAX_INTERVAL_MS = 300000;
+const WS_RECEIVE_GRACE_MS = 5000;
 const WS_LOG_PREFIX = '[ESP Chat WS]';
 
 let ws = null;
@@ -64,6 +66,8 @@ let hasJoined = false;
 let reconnectTimer = null;
 let connectTimer = null;
 let joinTimer = null;
+let receiveTimer = null;
+let heartbeatIntervalMs = WS_HEARTBEAT_MAX_INTERVAL_MS;
 let reconnectDelayMs = 1000;
 let wsUrlAttempt = 0;
 let wsConnectionSequence = 0;
@@ -775,6 +779,13 @@ function clearConnectTimer() {
     }
 }
 
+function clearReceiveTimer() {
+    if (receiveTimer) {
+        clearTimeout(receiveTimer);
+        receiveTimer = null;
+    }
+}
+
 function releaseSocket(socket) {
     if (ws !== socket) {
         return false;
@@ -783,6 +794,7 @@ function releaseSocket(socket) {
     wsJoined = false;
     clearConnectTimer();
     clearJoinTimer();
+    clearReceiveTimer();
     onlineUsers = new Map([[userId, { id: userId, name: getNickname() }]]);
     renderConversationList();
     if (activeRecovery) {
@@ -801,6 +813,18 @@ function reconnectSocket(socket, label) {
     socket.close();
     setStatus('offline', label);
     scheduleReconnect();
+}
+
+function armReceiveTimer(socket) {
+    clearReceiveTimer();
+    const timeoutMs = heartbeatIntervalMs * 2 + WS_RECEIVE_GRACE_MS;
+    receiveTimer = setTimeout(() => {
+        receiveTimer = null;
+        if (ws === socket && wsJoined) {
+            wsWarn('No server traffic within heartbeat window', { timeoutMs, url: socket.url });
+            reconnectSocket(socket, 'Connection timed out');
+        }
+    }, timeoutMs);
 }
 
 function armJoinTimer(socket) {
@@ -828,6 +852,7 @@ function confirmSocketJoin() {
         reconnectTimer = null;
     }
     reconnectDelayMs = 1000;
+    armReceiveTimer(ws);
     setStatus('online', 'Connected');
     wsLog('Join confirmed', {
         lastSeenId,
@@ -1067,6 +1092,13 @@ function handleHistoryInfo(msg) {
         return;
     }
 
+    if (Number.isInteger(msg.heartbeat_interval_s) && msg.heartbeat_interval_s >= 5 && msg.heartbeat_interval_s <= 300) {
+        heartbeatIntervalMs = msg.heartbeat_interval_s * 1000;
+        if (wsJoined) {
+            armReceiveTimer(ws);
+        }
+    }
+
     historyInfo = {
         boot_start_id: Number(msg.boot_start_id) || 0,
         current_id: Number(msg.current_id) || 0,
@@ -1188,6 +1220,7 @@ function handleIncoming(event) {
                 reconnectBlocked = true;
                 wsJoined = false;
                 clearJoinTimer();
+                clearReceiveTimer();
                 if (reconnectTimer) {
                     clearTimeout(reconnectTimer);
                     reconnectTimer = null;
@@ -1324,6 +1357,8 @@ function connect() {
             return;
         }
         clearConnectTimer();
+        clearReceiveTimer();
+        heartbeatIntervalMs = WS_HEARTBEAT_MAX_INTERVAL_MS;
         opened = true;
         wsUrlAttempt = 0;
         wsJoined = false;
@@ -1340,6 +1375,9 @@ function connect() {
 
     socket.onmessage = (event) => {
         if (ws === socket) {
+            if (wsJoined) {
+                armReceiveTimer(socket);
+            }
             handleIncoming(event);
         } else {
             wsWarn('Ignoring message from stale socket', {

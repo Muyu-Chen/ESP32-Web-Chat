@@ -35,7 +35,8 @@ starting ID boundary, partial send failure and retrying an unavailable ID store.
 The browser tests execute the complete client script in a Node VM with a minimal
 DOM, WebSocket and controllable clock/storage. They cover handshake and join
 timeouts, join-before-flush, stale socket events, replaced sessions, corrupt local
-data and replay cursor persistence failures.
+data and replay cursor persistence failures. They also simulate delayed close
+notifications, receive watchdogs and heartbeats that arrive without join progress.
 
 These tests do not emulate lwIP, the WebSocket wire format or real browser APIs.
 Firmware compilation and later hardware/browser testing are still needed for
