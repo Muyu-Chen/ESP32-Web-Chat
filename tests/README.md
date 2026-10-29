@@ -29,7 +29,8 @@ assert that sends and closes run on the HTTP task and outside both mutexes.
 The transport suite also compiles the production socket sender with deterministic
 socket doubles to check short writes, interruption, timeouts and zero progress.
 The ID-store suite compiles the production loader against NVS doubles to verify
-that failed reads never overwrite an existing counter.
+that failed reads never overwrite an existing counter. Replay tests cover the
+starting ID boundary, partial send failure and retrying an unavailable ID store.
 
 The browser tests execute the complete client script in a Node VM with a minimal
 DOM, WebSocket and controllable clock/storage. They cover handshake and join

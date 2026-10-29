@@ -158,73 +158,65 @@ bool chat_history_broadcast_info(app_context_t *ctx)
 
 esp_err_t chat_history_send_to_client(app_context_t *ctx, int fd, uint64_t since_id)
 {
-    char **payloads = calloc(MAX_MESSAGES, sizeof(char *));
-    bool allocation_failed = false;
-    int count = 0;
-
-    if (payloads == NULL) {
-        esp_err_t ret = chat_ws_send_error(ctx, fd, "server_busy", "Message history is temporarily unavailable");
-        return ret == ESP_OK ? ESP_ERR_NO_MEM : ret;
+    if (ctx == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
-
-    if (ctx == NULL || xSemaphoreTake(ctx->message_mutex, portMAX_DELAY) != pdTRUE) {
-        free(payloads);
-        esp_err_t ret = chat_ws_send_error(ctx, fd, "server_busy", "Message history is temporarily unavailable");
-        return ret == ESP_OK ? ESP_ERR_TIMEOUT : ret;
+    if (xSemaphoreTake(ctx->message_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
     }
-
-    int current_pos = ctx->message_buffer_head;
-    for (int i = 0; i < MAX_MESSAGES; i++) {
-        int index = (current_pos + i) % MAX_MESSAGES;
-        if (ctx->message_buffer[index].payload == NULL || ctx->message_buffer[index].id <= since_id) {
-            continue;
-        }
-
-        size_t len = strlen(ctx->message_buffer[index].payload);
-        payloads[count] = malloc(len + 1);
-        if (payloads[count] == NULL) {
-            allocation_failed = true;
-            break;
-        }
-        memcpy(payloads[count], ctx->message_buffer[index].payload, len + 1);
-        count++;
-    }
-
+    uint64_t replay_until = ctx->message_id_counter;
     xSemaphoreGive(ctx->message_mutex);
 
-    if (allocation_failed) {
-        for (int i = 0; i < count; i++) {
-            free(payloads[i]);
-        }
-        free(payloads);
-        esp_err_t ret = chat_ws_send_error(ctx, fd, "server_busy", "Message history is temporarily unavailable");
-        return ret == ESP_OK ? ESP_ERR_NO_MEM : ret;
-    }
-
+    uint64_t cursor = since_id;
     int sent = 0;
-    esp_err_t result = ESP_OK;
-    for (int i = 0; i < count; i++) {
-        esp_err_t ret = chat_ws_send_text(ctx, fd, payloads[i]);
-        free(payloads[i]);
-        payloads[i] = NULL;
-        if (ret == ESP_OK) {
-            sent++;
-            continue;
+    for (int replayed = 0; replayed < MAX_MESSAGES && cursor < replay_until; replayed++) {
+        if (xSemaphoreTake(ctx->message_mutex, portMAX_DELAY) != pdTRUE) {
+            return ESP_ERR_TIMEOUT;
         }
 
-        ESP_LOGW(TAG, "History send failed for fd=%d: %s", fd, esp_err_to_name(ret));
-        chat_ws_close_client(ctx, fd);
-        result = ret;
-        break;
-    }
+        const message_t *next = NULL;
+        for (int i = 0; i < MAX_MESSAGES; i++) {
+            const message_t *candidate = &ctx->message_buffer[i];
+            if (candidate->payload != NULL && candidate->id > cursor && candidate->id <= replay_until &&
+                (next == NULL || candidate->id < next->id)) {
+                next = candidate;
+            }
+        }
 
-    for (int i = 0; i < count; i++) {
-        free(payloads[i]);
+        char *payload = NULL;
+        uint64_t next_id = next ? next->id : 0;
+        if (next != NULL) {
+            size_t length = strlen(next->payload) + 1;
+            payload = malloc(length);
+            if (payload != NULL) {
+                memcpy(payload, next->payload, length);
+            }
+        }
+        xSemaphoreGive(ctx->message_mutex);
+
+        if (next_id == 0) {
+            break;
+        }
+        if (payload == NULL) {
+            esp_err_t ret = chat_ws_send_error(ctx, fd, "server_busy", "Message history is temporarily unavailable");
+            return ret == ESP_OK ? ESP_ERR_NO_MEM : ret;
+        }
+
+        // Keep only one copied message alive; network I/O never holds message_mutex.
+        esp_err_t ret = chat_ws_send_text(ctx, fd, payload);
+        free(payload);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "History send failed for fd=%d: %s", fd, esp_err_to_name(ret));
+            chat_ws_close_client(ctx, fd);
+            return ret;
+        }
+
+        cursor = next_id;
+        sent++;
     }
 
     ESP_LOGI(TAG, "Sent %d history messages to fd=%d since_id=%" PRIu64, sent, fd, since_id);
-    free(payloads);
-    return result;
+    return ESP_OK;
 }
 
 static esp_err_t ensure_id_state_locked(app_context_t *ctx)

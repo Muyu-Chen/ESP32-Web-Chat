@@ -20,6 +20,8 @@ static uint64_t sent_ids[16];
 static esp_err_t error_result, queue_result;
 static esp_err_t load_result;
 static uint64_t load_current_id;
+static int fail_on_send;
+static void (*on_send)(void);
 static int64_t now_s;
 static TaskHandle_t current_task;
 static void (*queued_work)(void *);
@@ -77,6 +79,8 @@ esp_err_t chat_ws_send_text(app_context_t *app, int fd, const char *payload)
     cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "id");
     sent_ids[sends++ % 16] = cJSON_IsNumber(id) ? (uint64_t)id->valuedouble : 0;
     cJSON_Delete(root);
+    if (on_send != NULL) { on_send(); }
+    if (fail_on_send > 0 && sends == fail_on_send) { return ESP_FAIL; }
     return ESP_OK;
 }
 
@@ -132,6 +136,8 @@ static void reset(void)
     ctx.message_id_counter_valid = true;
     current_task = ctx.httpd_task_handle;
     errors = closes = sends = broadcasts = 0;
+    fail_on_send = 0;
+    on_send = NULL;
     error_result = queue_result = ESP_OK;
     load_result = ESP_OK;
     load_current_id = 0;
