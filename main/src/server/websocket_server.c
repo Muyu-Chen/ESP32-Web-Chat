@@ -259,11 +259,8 @@ esp_err_t chat_ws_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    bool contains_nul = memchr(ws_pkt.payload, '\0', ws_pkt.len) != NULL;
-    cJSON *root = contains_nul
-        ? NULL
-        : cJSON_ParseWithLengthOpts((const char *)ws_pkt.payload, ws_pkt.len + 1, NULL, true);
-    if (root == NULL || !cJSON_IsObject(root) || json_has_duplicate_keys(root)) {
+    cJSON *root = chat_json_parse_object((const char *)ws_pkt.payload, ws_pkt.len);
+    if (root == NULL) {
         chat_ws_send_error(ctx, fd, "bad_json", "Invalid JSON object");
         if (!chat_sessions_is_joined(ctx, fd)) {
             chat_ws_close_client(ctx, fd);

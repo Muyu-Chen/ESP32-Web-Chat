@@ -27,6 +27,7 @@
 #define MIN_ADMIN_PASS_LEN         4
 #define MAX_ADMIN_PASS_LEN         32
 #define SETTINGS_BODY_BYTES        512
+#define MAX_JSON_NESTING_DEPTH     16
 #define DNS_PACKET_BYTES           256
 #define DNS_ANSWER_BYTES           16
 #define HTTPD_INTERNAL_SOCKETS     3

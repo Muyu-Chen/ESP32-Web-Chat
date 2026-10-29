@@ -165,7 +165,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         return send_http_error(req, "bad_body", "Settings payload is empty or too large");
     }
 
-    cJSON *root = cJSON_Parse(body);
+    cJSON *root = chat_json_parse_object(body, req->content_len);
     free(body);
     if (root == NULL || !cJSON_IsObject(root)) {
         cJSON_Delete(root);

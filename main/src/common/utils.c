@@ -75,6 +75,69 @@ bool json_has_duplicate_keys(const cJSON *item)
     return false;
 }
 
+cJSON *chat_json_parse_object(const char *payload, size_t length)
+{
+    if (payload == NULL || length == 0) {
+        return NULL;
+    }
+
+    // Bound recursion before cJSON touches untrusted input on the HTTP task stack.
+    unsigned depth = 0;
+    bool in_string = false;
+    for (size_t i = 0; i < length; i++) {
+        unsigned char ch = (unsigned char)payload[i];
+        if (ch == '\0') {
+            return NULL;
+        }
+        if (in_string) {
+            if (ch < 0x20) {
+                return NULL;
+            }
+            if (ch == '\\') {
+                if (i + 1 >= length) {
+                    return NULL;
+                }
+                // cJSON stores C strings: decoded NULs would truncate IDs, keys and passwords.
+                if (i + 5 < length && memcmp(payload + i + 1, "u0000", 5) == 0) {
+                    return NULL;
+                }
+                i++;
+            } else if (ch == '"') {
+                in_string = false;
+            }
+        } else if (ch == '"') {
+            in_string = true;
+        } else if (ch == '{' || ch == '[') {
+            if (++depth > MAX_JSON_NESTING_DEPTH) {
+                return NULL;
+            }
+        } else if (ch == '}' || ch == ']') {
+            if (depth == 0) {
+                return NULL;
+            }
+            depth--;
+        } else if (ch < 0x20 && ch != '\t' && ch != '\n' && ch != '\r') {
+            return NULL;
+        }
+    }
+    if (in_string || depth != 0) {
+        return NULL;
+    }
+
+    const char *end = NULL;
+    cJSON *root = cJSON_ParseWithLengthOpts(payload, length, &end, false);
+    if (root != NULL) {
+        while (end < payload + length && (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r')) {
+            end++;
+        }
+    }
+    if (!cJSON_IsObject(root) || end != payload + length || json_has_duplicate_keys(root)) {
+        cJSON_Delete(root);
+        return NULL;
+    }
+    return root;
+}
+
 int64_t device_uptime_s(void)
 {
     return esp_timer_get_time() / 1000000LL;
