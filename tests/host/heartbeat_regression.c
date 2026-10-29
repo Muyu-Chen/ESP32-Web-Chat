@@ -42,5 +42,37 @@ int main(void)
     schedule_sweep();
     run_work();
     reset();
+
+    join(10);
+    chat_sessions_start_heartbeat(&ctx);
+    sends = 0;
+    now_s = HEARTBEAT_INTERVAL_S;
+    schedule_sweep();
+    run_work();
+    assert(sends == 1);
+    now_s += HEARTBEAT_INTERVAL_S * 3;
+    schedule_sweep();
+    run_work();
+    assert(closes == 0 && sends == 2 && chat_sessions_is_joined(&ctx, 10));
+    assert(chat_sessions_mark_alive(&ctx, 10));
+    now_s++;
+    schedule_sweep();
+    run_work();
+    assert(closes == 0);
+
+    reset();
+    chat_sessions_start_heartbeat(&ctx);
+    assert(chat_sessions_ensure_slot(&ctx, 10));
+    now_s = WS_JOIN_TIMEOUT_S * 3;
+    schedule_sweep();
+    run_work();
+    assert(closes == 0);
+    for (int i = 0; i < WS_JOIN_TIMEOUT_S; i++) {
+        now_s++;
+        schedule_sweep();
+        run_work();
+    }
+    assert(closes == 1);
+    reset();
     puts("Heartbeat regressions passed: HTTP task ownership, fd reuse and queue failures");
 }

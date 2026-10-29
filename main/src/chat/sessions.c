@@ -460,6 +460,8 @@ static void heartbeat_sweep_work(void *arg)
         return;
     }
     ctx->heartbeat_sweep_pending = false;
+    bool delayed = now_s - ctx->last_heartbeat_sweep_s > HEARTBEAT_INTERVAL_S;
+    ctx->last_heartbeat_sweep_s = now_s;
 
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (!ctx->client_slots[i].active || ctx->client_slots[i].closing) {
@@ -467,6 +469,10 @@ static void heartbeat_sweep_work(void *arg)
         }
 
         if (!ctx->client_slots[i].joined) {
+            if (delayed) {
+                ctx->client_slots[i].registered_at_s = now_s;
+                continue;
+            }
             if (now_s - ctx->client_slots[i].registered_at_s < WS_JOIN_TIMEOUT_S) {
                 continue;
             }
@@ -478,6 +484,11 @@ static void heartbeat_sweep_work(void *arg)
             continue;
         }
 
+        // A delayed HTTP task may not have consumed an already queued pong yet.
+        if (delayed && !ctx->client_slots[i].is_alive) {
+            ctx->client_slots[i].is_alive = true;
+            ctx->client_slots[i].last_ping_s = now_s - HEARTBEAT_INTERVAL_S;
+        }
         if (!ctx->client_slots[i].is_alive) {
             if (now_s - ctx->client_slots[i].last_ping_s < HEARTBEAT_INTERVAL_S) {
                 continue;
@@ -554,6 +565,11 @@ static void heartbeat_task(void *pvParameters)
 
 void chat_sessions_start_heartbeat(app_context_t *ctx)
 {
+    if (ctx == NULL || xSemaphoreTake(ctx->client_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+    ctx->last_heartbeat_sweep_s = device_uptime_s();
+    xSemaphoreGive(ctx->client_mutex);
     BaseType_t created = xTaskCreate(heartbeat_task, "heartbeat_task", 4096, ctx, 5, NULL);
     if (created != pdPASS) {
         ESP_LOGE(TAG, "Failed to start heartbeat task");
