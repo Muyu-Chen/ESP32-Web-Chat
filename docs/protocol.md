@@ -93,6 +93,7 @@ WebSocket 路径是 `/ws`，只支持文本 JSON 帧。
 行为：
 
 - 绑定 socket 与用户身份。
+- 若消息 ID 状态尚未成功加载，返回 `server_busy` 并关闭连接，不确认 join；前端保留待发队列，在重连时重试。
 - `since_id` 可省略；存在时必须是 `0..9007199254740991` 的整数，否则返回 `bad_since_id`。
 - 回放 `id > since_id` 的服务端缓存消息；如果 `since_id` 已经大于当前最新消息，则不重复回放。
 - 返回 `historyInfo`。
@@ -115,6 +116,7 @@ WebSocket 路径是 `/ws`，只支持文本 JSON 帧。
 ```
 
 服务端会覆盖客户端传入的 `id` 和 `timestamp`，生成正式值后广播。
+如果 NVS 消息 ID 读取失败，服务端不会把计数器重置为 0，也不会接受可能复用 ID 的消息；发送时会重新尝试加载，未恢复前返回 `server_busy`。
 
 ### 客户端发送 `newGroup`
 

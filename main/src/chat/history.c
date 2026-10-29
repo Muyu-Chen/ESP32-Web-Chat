@@ -227,6 +227,36 @@ esp_err_t chat_history_send_to_client(app_context_t *ctx, int fd, uint64_t since
     return result;
 }
 
+static esp_err_t ensure_id_state_locked(app_context_t *ctx)
+{
+    if (ctx->message_id_counter_valid) {
+        return ESP_OK;
+    }
+
+    chat_message_id_state_t state = { 0 };
+    esp_err_t ret = chat_message_ids_load(&state);
+    if (!state.counter_loaded) {
+        return ret == ESP_OK ? ESP_ERR_INVALID_STATE : ret;
+    }
+    ctx->message_id_counter = state.current_id;
+    ctx->boot_start_id = state.boot_start_id;
+    ctx->message_id_counter_valid = true;
+    return ESP_OK;
+}
+
+esp_err_t chat_history_ensure_id_state(app_context_t *ctx)
+{
+    if (ctx == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (xSemaphoreTake(ctx->message_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t ret = ensure_id_state_locked(ctx);
+    xSemaphoreGive(ctx->message_mutex);
+    return ret;
+}
+
 esp_err_t chat_history_finalize_and_store_message(app_context_t *ctx, cJSON *root, char **payload_out)
 {
     char *payload = NULL;
@@ -239,6 +269,11 @@ esp_err_t chat_history_finalize_and_store_message(app_context_t *ctx, cJSON *roo
 
     if (xSemaphoreTake(ctx->message_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
+    }
+
+    ret = ensure_id_state_locked(ctx);
+    if (ret != ESP_OK) {
+        goto out;
     }
 
     if (ctx->message_id_counter >= CHAT_MESSAGE_MAX_SAFE_ID) {

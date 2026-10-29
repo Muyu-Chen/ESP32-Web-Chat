@@ -18,6 +18,7 @@ typedef struct {
 
     message_t message_buffer[MAX_MESSAGES];
     uint64_t message_id_counter;
+    bool message_id_counter_valid;
     uint64_t boot_start_id;
     int message_buffer_head;
     SemaphoreHandle_t message_mutex;

@@ -195,6 +195,9 @@ static esp_err_t handle_join_message(app_context_t *ctx, int fd, cJSON *root)
     if (chat_sessions_check_identity(ctx, fd, from->valuestring) == CHAT_IDENTITY_MISMATCH) {
         return send_error_and_close(ctx, fd, "bad_identity", "Join identity cannot change on an open connection");
     }
+    if (chat_history_ensure_id_state(ctx) != ESP_OK) {
+        return send_error_and_close(ctx, fd, "server_busy", "Message ID storage is temporarily unavailable");
+    }
 
     if (!chat_sessions_update_identity(ctx, fd, from->valuestring, name->valuestring)) {
         return send_error_and_close(ctx, fd, "not_registered", "WebSocket client slot was not found");

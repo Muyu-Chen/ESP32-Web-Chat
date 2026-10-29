@@ -18,6 +18,8 @@ static int client_lock, message_lock;
 static int errors, closes, sends, broadcasts, delay_count;
 static uint64_t sent_ids[16];
 static esp_err_t error_result, queue_result;
+static esp_err_t load_result;
+static uint64_t load_current_id;
 static int64_t now_s;
 static TaskHandle_t current_task;
 static void (*queued_work)(void *);
@@ -108,6 +110,16 @@ esp_err_t chat_message_ids_persist(uint64_t id, uint64_t boot_start)
     return ESP_OK;
 }
 
+esp_err_t chat_message_ids_load(chat_message_id_state_t *state)
+{
+    *state = (chat_message_id_state_t) {
+        .current_id = load_current_id,
+        .boot_start_id = load_current_id + 1,
+        .counter_loaded = load_result == ESP_OK,
+    };
+    return load_result;
+}
+
 static void reset(void)
 {
     for (int i = 0; i < MAX_MESSAGES; i++) { free(ctx.message_buffer[i].payload); }
@@ -117,9 +129,12 @@ static void reset(void)
     ctx.server = &ctx;
     ctx.httpd_task_handle = &ctx;
     ctx.boot_start_id = 1;
+    ctx.message_id_counter_valid = true;
     current_task = ctx.httpd_task_handle;
     errors = closes = sends = broadcasts = 0;
     error_result = queue_result = ESP_OK;
+    load_result = ESP_OK;
+    load_current_id = 0;
     queued_work = NULL;
     now_s = 0;
 }

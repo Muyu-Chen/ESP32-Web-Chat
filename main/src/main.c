@@ -39,9 +39,10 @@ void app_main(void)
     chat_message_id_state_t id_state = { 0 };
     esp_err_t id_ret = chat_message_ids_load(&id_state);
     if (id_ret != ESP_OK) {
-        ESP_LOGW(TAG, "Message ids may not persist until NVS recovers: %s", esp_err_to_name(id_ret));
+        ESP_LOGW(TAG, "Message ID storage is unavailable; sends will retry: %s", esp_err_to_name(id_ret));
     }
     g_app_context.message_id_counter = id_state.current_id;
+    g_app_context.message_id_counter_valid = id_state.counter_loaded;
     g_app_context.boot_start_id = id_state.boot_start_id;
 
     chat_settings_load(&g_app_context);
