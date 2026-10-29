@@ -465,19 +465,30 @@ function updateConversationFromMessage(msg) {
 }
 
 function saveIncomingMessage(msg) {
-    rememberSeenId(msg.id);
+    if (!validHistoryMessage(msg)) {
+        wsWarn('Ignored invalid chat message', wsMessageSummary(msg));
+        return false;
+    }
     if (!isMessageForMe(msg)) {
+        if (saveMessages()) {
+            rememberSeenId(msg.id);
+        }
         return false;
     }
 
     const id = Number(msg.id);
     if (!isSafeMessageId(id) || allMessages.some((stored) => Number(stored.id) === id)) {
+        if (saveMessages()) {
+            rememberSeenId(id);
+        }
         return false;
     }
 
     allMessages.push(msg);
     updateConversationFromMessage(msg);
-    saveMessages();
+    if (saveMessages()) {
+        rememberSeenId(id);
+    }
     saveConversations();
     return true;
 }
@@ -1097,10 +1108,6 @@ function handleIncoming(event) {
         }
 
         wsLog('Received message', summary);
-
-        if (Number.isSafeInteger(Number(msg.id))) {
-            rememberSeenId(msg.id);
-        }
 
         if (msg.type === 'historyInfo') {
             handleHistoryInfo(msg);
