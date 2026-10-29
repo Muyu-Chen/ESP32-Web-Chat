@@ -23,6 +23,11 @@ PATH="/path/to/.espressif/tools/cmake/4.0.3/CMake.app/Contents/bin:/path/to/.esp
 idf.py build
 ```
 
+## 无硬件回归测试
+
+协议、心跳调度、历史回放和浏览器重连可在主机上测试。运行命令和
+覆盖范围见 [tests/README.md](../tests/README.md)。这些测试不会连接或烧录设备。
+
 ## 烧录
 
 ```bash
@@ -57,6 +62,13 @@ build/esp32-chat.bin
 ```
 
 ## 常见问题
+
+### `partitions_example.csv` 不存在
+
+v0.2.0 已将分区文件改名为 `partitions.csv`。已有 `sdkconfig` 不会被
+`sdkconfig.defaults` 自动覆盖；如果沿用旧配置，请将
+`CONFIG_PARTITION_TABLE_CUSTOM_FILENAME` 和 `CONFIG_PARTITION_TABLE_FILENAME`
+同步改为 `partitions.csv` 后重新构建。
 
 ### `idf.py: command not found`
 
