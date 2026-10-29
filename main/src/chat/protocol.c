@@ -99,7 +99,7 @@ static esp_err_t send_error_and_close(app_context_t *ctx, int fd, const char *co
 {
     esp_err_t ret = chat_ws_send_error(ctx, fd, code, message);
     chat_ws_close_client(ctx, fd);
-    return ret;
+    return ret == ESP_OK ? ESP_ERR_INVALID_STATE : ret;
 }
 
 static esp_err_t relay_payload_to_targets(app_context_t *ctx, cJSON *to, const char *payload)
