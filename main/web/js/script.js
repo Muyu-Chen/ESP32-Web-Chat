@@ -383,7 +383,7 @@ function validHistoryMessage(msg) {
     if (msg.type === 'text' && msg.data.length === 0) {
         return false;
     }
-    if (msg.type === 'newGroup') {
+    if (msg.type === 'newGroup' || msg.groupId !== undefined || msg.groupName !== undefined) {
         return typeof msg.groupId === 'string' && msg.groupId.length > 0 && wsDataSize(msg.groupId) <= 63 &&
             typeof msg.groupName === 'string' && msg.groupName.length > 0 && wsDataSize(msg.groupName) <= 63;
     }
@@ -776,7 +776,6 @@ function clearConnectTimer() {
     }
 }
 
-
 function armJoinTimer(socket) {
     clearJoinTimer();
     joinTimer = setTimeout(() => {
@@ -930,7 +929,7 @@ function historyMessagePayload(msg) {
         timestamp: Number(msg.timestamp) || 0
     };
 
-    if (msg.type === 'newGroup') {
+    if (msg.type === 'newGroup' || msg.groupId !== undefined) {
         payload.groupId = msg.groupId;
         payload.groupName = msg.groupName;
     }

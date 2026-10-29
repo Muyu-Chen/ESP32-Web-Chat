@@ -52,6 +52,17 @@ static bool validate_to_object(cJSON *root)
     return cJSON_IsTrue(all) || cJSON_GetArraySize(users) > 0;
 }
 
+static bool validate_group_fields(cJSON *message, bool required)
+{
+    cJSON *group_id = cJSON_GetObjectItemCaseSensitive(message, "groupId");
+    cJSON *group_name = cJSON_GetObjectItemCaseSensitive(message, "groupName");
+    if (!required && group_id == NULL && group_name == NULL) {
+        return true;
+    }
+    return json_string_in_range(group_id, MAX_GROUP_ID_LEN, false) &&
+        json_string_in_range(group_name, MAX_GROUP_NAME_LEN, false);
+}
+
 static bool message_visible_to_user(cJSON *message, const char *user_id)
 {
     if (!cJSON_IsObject(message) || user_id == NULL || user_id[0] == '\0') {
@@ -216,6 +227,10 @@ static esp_err_t handle_chat_message(app_context_t *ctx, int fd, cJSON *root)
         return chat_ws_send_error(ctx, fd, "bad_message", "Message requires valid from and name fields");
     }
 
+    if (!validate_group_fields(root, strcmp(type->valuestring, "newGroup") == 0)) {
+        return chat_ws_send_error(ctx, fd, "bad_group", "Group metadata requires valid groupId and groupName");
+    }
+
     if (strcmp(type->valuestring, "text") == 0) {
         cJSON *data = cJSON_GetObjectItemCaseSensitive(root, "data");
         if (!json_string_in_range(data, MAX_TEXT_BYTES, false)) {
@@ -225,13 +240,9 @@ static esp_err_t handle_chat_message(app_context_t *ctx, int fd, cJSON *root)
             return chat_ws_send_error(ctx, fd, "bad_target", "Message target must be all users or a non-empty user list");
         }
     } else if (strcmp(type->valuestring, "newGroup") == 0) {
-        cJSON *group_id = cJSON_GetObjectItemCaseSensitive(root, "groupId");
-        cJSON *group_name = cJSON_GetObjectItemCaseSensitive(root, "groupName");
         cJSON *data = cJSON_GetObjectItemCaseSensitive(root, "data");
 
-        if (!json_string_in_range(group_id, MAX_GROUP_ID_LEN, false) ||
-            !json_string_in_range(group_name, MAX_GROUP_NAME_LEN, false) ||
-            !json_string_in_range(data, MAX_TEXT_BYTES, true) ||
+        if (!json_string_in_range(data, MAX_TEXT_BYTES, true) ||
             !validate_to_object(root)) {
             return chat_ws_send_error(ctx, fd, "bad_group", "Group creation requires groupId, groupName, data, and target users");
         }
@@ -274,7 +285,8 @@ static bool validate_history_message_object(cJSON *message)
         !json_string_in_range(type, 24, false) ||
         !json_string_in_range(from, MAX_USER_ID_LEN, false) ||
         !json_string_in_range(name, MAX_NAME_LEN, false) ||
-        !validate_to_object(message)) {
+        !validate_to_object(message) ||
+        !validate_group_fields(message, strcmp(type->valuestring, "newGroup") == 0)) {
         return false;
     }
 
@@ -283,9 +295,7 @@ static bool validate_history_message_object(cJSON *message)
     }
 
     if (strcmp(type->valuestring, "newGroup") == 0) {
-        return json_string_in_range(cJSON_GetObjectItemCaseSensitive(message, "groupId"), MAX_GROUP_ID_LEN, false) &&
-            json_string_in_range(cJSON_GetObjectItemCaseSensitive(message, "groupName"), MAX_GROUP_NAME_LEN, false) &&
-            json_string_in_range(cJSON_GetObjectItemCaseSensitive(message, "data"), MAX_TEXT_BYTES, true);
+        return json_string_in_range(cJSON_GetObjectItemCaseSensitive(message, "data"), MAX_TEXT_BYTES, true);
     }
 
     return false;
