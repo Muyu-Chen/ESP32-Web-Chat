@@ -42,6 +42,10 @@ export function client(initialStorage = {}, options = {}) {
         }
         receive(message) { this.onmessage({ data: JSON.stringify(message) }); }
         close() {
+            this.readyState = Socket.CLOSING;
+            if (!options.deferClose) { this.finishClose(); }
+        }
+        finishClose() {
             this.readyState = Socket.CLOSED;
             this.onclose?.({ code: 1006, reason: '', wasClean: false });
         }

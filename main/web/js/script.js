@@ -755,8 +755,7 @@ function sendRaw(payload) {
             error
         });
         if (ws === socket) {
-            wsJoined = false;
-            socket.close();
+            reconnectSocket(socket, 'Send failed');
         }
     }
     return false;
@@ -776,6 +775,34 @@ function clearConnectTimer() {
     }
 }
 
+function releaseSocket(socket) {
+    if (ws !== socket) {
+        return false;
+    }
+    ws = null;
+    wsJoined = false;
+    clearConnectTimer();
+    clearJoinTimer();
+    onlineUsers = new Map([[userId, { id: userId, name: getNickname() }]]);
+    renderConversationList();
+    if (activeRecovery) {
+        clearTimeout(activeRecovery.timer);
+        activeRecovery = null;
+        setRecoveryStatus('Recovery interrupted.');
+    }
+    updateRecoveryControls();
+    return true;
+}
+
+function reconnectSocket(socket, label) {
+    if (!releaseSocket(socket)) {
+        return;
+    }
+    socket.close();
+    setStatus('offline', label);
+    scheduleReconnect();
+}
+
 function armJoinTimer(socket) {
     clearJoinTimer();
     joinTimer = setTimeout(() => {
@@ -784,8 +811,7 @@ function armJoinTimer(socket) {
                 timeoutMs: WS_JOIN_TIMEOUT_MS,
                 url: socket.url
             });
-            setStatus('offline', 'Join timed out');
-            socket.close();
+            reconnectSocket(socket, 'Join timed out');
         }
     }, WS_JOIN_TIMEOUT_MS);
 }
@@ -818,7 +844,7 @@ function resetSinceIdAndReconnect() {
     wsJoined = false;
     clearJoinTimer();
     if (ws) {
-        ws.close();
+        reconnectSocket(ws, 'Resetting history cursor');
     } else {
         scheduleReconnect();
     }
@@ -1273,7 +1299,16 @@ function connect() {
     connectTimer = setTimeout(() => {
         if (ws === socket && socket.readyState === WebSocket.CONNECTING) {
             wsWarn('WebSocket handshake timed out', { connectionId, url });
+            releaseSocket(socket);
             socket.close();
+            if (wsUrlAttempt < urls.length - 1) {
+                wsUrlAttempt += 1;
+                setStatus('connecting', 'Trying ESP32 address...');
+                setTimeout(connect, WS_FALLBACK_DELAY_MS);
+            } else {
+                wsUrlAttempt = 0;
+                scheduleReconnect();
+            }
         }
     }, WS_CONNECT_TIMEOUT_MS);
 
@@ -1330,18 +1365,7 @@ function connect() {
             opened,
             joined: joinedBeforeClose
         });
-        ws = null;
-        wsJoined = false;
-        clearConnectTimer();
-        clearJoinTimer();
-        onlineUsers = new Map([[userId, { id: userId, name: getNickname() }]]);
-        renderConversationList();
-        if (activeRecovery) {
-            clearTimeout(activeRecovery.timer);
-            activeRecovery = null;
-            setRecoveryStatus('Recovery interrupted.');
-        }
-        updateRecoveryControls();
+        releaseSocket(socket);
         if (reconnectBlocked) {
             setStatus('offline', 'Open in another tab');
             wsWarn('Automatic reconnect remains disabled', { connectionId });

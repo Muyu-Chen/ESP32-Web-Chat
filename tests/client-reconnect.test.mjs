@@ -62,3 +62,26 @@ test('bad_since_id clears the cursor and session_replaced suppresses reconnect',
     assert.equal(app.sockets.length, 2);
     assert.equal(app.evaluate('reconnectBlocked'), true);
 });
+
+test('join timeouts reconnect without waiting for a delayed browser close event', () => {
+    const app = client({}, { deferClose: true });
+    const oldSocket = connect(app);
+    app.tick(16000);
+    assert.equal(app.sockets.length, 2);
+    const socket = app.sockets[1];
+    socket.open();
+    socket.receive({ type: 'historyInfo', restore_before_id: 1, heartbeat_interval_s: 5 });
+    socket.receive(presence);
+    oldSocket.receive(message(999));
+    oldSocket.finishClose();
+    assert.equal(app.evaluate('lastSeenId'), 0);
+    assert.equal(app.evaluate('wsJoined'), true);
+});
+
+test('handshake timeouts try the fallback even when close notification is delayed', () => {
+    const app = client({}, { deferClose: true });
+    app.evaluate('connect()');
+    app.tick(10250);
+    assert.equal(app.sockets.length, 2);
+    assert.equal(app.sockets[1].url, 'ws://192.168.4.1/ws');
+});
