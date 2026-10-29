@@ -11,6 +11,7 @@
 
 #include "common/settings.h"
 #include "common/utils.h"
+#include "server/socket_transport.h"
 #include "server/websocket_server.h"
 
 static const char *TAG = "CHAT_HTTP";
@@ -280,9 +281,10 @@ httpd_handle_t chat_http_start_server(app_context_t *ctx)
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.max_uri_handlers = 12;
     config.stack_size = 6144;
-    config.send_wait_timeout = 1;
+    config.send_wait_timeout = HTTP_SEND_TIMEOUT_S;
     config.lru_purge_enable = false;
     config.close_fn = chat_ws_session_close_handler;
+    config.open_fn = chat_http_session_open_handler;
 
     int desired_sockets = MAX_CLIENTS + HTTP_STATIC_SOCKET_MARGIN;
 #ifdef CONFIG_LWIP_MAX_SOCKETS

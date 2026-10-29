@@ -6,6 +6,7 @@ idf_component_register(
         "src/network/softap.c"
         "src/network/dns_server.c"
         "src/server/http_server.c"
+        "src/server/socket_transport.c"
         "src/server/websocket_server.c"
         "src/chat/sessions.c"
         "src/chat/history.c"

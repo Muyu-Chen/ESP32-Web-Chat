@@ -26,6 +26,8 @@ The C tests execute the real protocol, history, session and JSON parsing code.
 Small FreeRTOS/HTTP/NVS doubles let the tests exercise successful error responses,
 heartbeat scheduling, fd reuse, queue failures and ring-buffer replay. The doubles
 assert that sends and closes run on the HTTP task and outside both mutexes.
+The transport suite also compiles the production socket sender with deterministic
+socket doubles to check short writes, interruption, timeouts and zero progress.
 
 The browser tests execute the complete client script in a Node VM with a minimal
 DOM, WebSocket and controllable clock/storage. They cover handshake and join

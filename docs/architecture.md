@@ -66,10 +66,14 @@ flowchart LR
 
 | 任务 | 创建位置 | 职责 |
 | --- | --- | --- |
-| HTTPD task | ESP-IDF HTTP Server 内部创建 | 处理 HTTP 和 WebSocket 回调 |
+| HTTPD task | ESP-IDF HTTP Server 内部创建 | 处理 HTTP、WebSocket 回调及排队的心跳巡检 |
 | DNS task | `chat_dns_start()` | UDP 53 DNS 劫持 |
-| heartbeat task | `chat_sessions_start_heartbeat()` | 定时 ping 客户端并清理失活连接 |
+| heartbeat task | `chat_sessions_start_heartbeat()` | 定时提交心跳巡检，由 HTTPD task 发送 ping 并清理失活连接 |
 | restart task | `server/http_server.c` | 设置保存后延迟重启 |
+
+每个 HTTP 会话在打开时安装 `server/socket_transport.c` 的完整写回调。
+该回调补齐短写，重试 `EINTR`，超过重试时间预算或发送失败时关闭 socket 的收发方向，
+随后由 HTTP Server 完成会话清理，避免残缺 WebSocket 帧与后续帧拼接。
 
 ## 锁边界
 

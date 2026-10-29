@@ -62,6 +62,7 @@ main/
 | HTTP 静态资源 | `server/http_server.c`、`main/CMakeLists.txt`、`main/web` |
 | 设置页后端 | `common/settings.c`、`server/http_server.c` |
 | WebSocket 收发 | `server/websocket_server.c` |
+| HTTP/WS 底层完整写与发送失败处理 | `server/socket_transport.c` |
 | 新增消息类型 | `chat/protocol.c` |
 | 在线用户/心跳 | `chat/sessions.c` |
 | 最近消息缓存/历史边界 | `chat/history.c` |
